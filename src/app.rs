@@ -61,16 +61,16 @@ pub struct AsciiArtEditor {
     pub last_primary: bool,
     pub status_msg: String,
     pub status_timer: f32,
-    pub show_new_dialog:   bool,
+    pub show_new_dialog:    bool,
     pub show_resize_dialog: bool,
     pub show_about_dialog:  bool,
+    pub about_tab:          usize, // 0 = About & Shortcuts, 1 = Author
     pub new_width:  usize,
     pub new_height: usize,
 }
 
 impl Default for AsciiArtEditor {
     fn default() -> Self {
-        let color_panel = ColorPanel::default();
         Self {
             doc:          Document::new(80, 40),
             history:      History::new(100),
@@ -78,7 +78,7 @@ impl Default for AsciiArtEditor {
             tools:        ToolState::default(),
             canvas_state: CanvasState::default(),
             char_palette: CharPalette::default(),
-            color_panel,
+            color_panel:  ColorPanel::default(),
             layer_panel:  LayerPanel::default(),
             tool_options: ToolOptionsPanel::default(),
             primary_char:   '#',
@@ -91,6 +91,7 @@ impl Default for AsciiArtEditor {
             show_new_dialog:    false,
             show_resize_dialog: false,
             show_about_dialog:  false,
+            about_tab:          0,
             new_width:  80,
             new_height: 40,
         }
@@ -172,7 +173,7 @@ impl AsciiArtEditor {
                     ToolType::Ellipse   => self.tools.ellipse.on_release(&mut self.doc, cur.0, cur.1, &ctx),
                     ToolType::Line      => self.tools.line.on_release(&mut self.doc, cur.0, cur.1, &ctx),
                     ToolType::Border    => self.tools.border.on_release(&mut self.doc, cur.0, cur.1, &ctx),
-                    ToolType::Select => self.tools.selection.on_release(&mut self.doc),
+                    ToolType::Select    => self.tools.selection.on_release(&mut self.doc),
                     _ => Default::default(),
                 };
 
@@ -371,89 +372,164 @@ impl AsciiArtEditor {
             .open(&mut open)
             .resizable(false)
             .collapsible(false)
-            .min_width(400.0)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .min_width(440.0)
             .show(ctx, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new("🎨 Void Canvas")
-                            .size(28.0)
-                            .strong(),
-                    );
-                    ui.label(
-                        egui::RichText::new("v1.0.0")
-                            .size(14.0)
-                            .color(egui::Color32::from_gray(160)),
-                    );
-                    ui.add_space(4.0);
-                    ui.label("ASCII art editor with layers, history & rich tools.");
-                    ui.add_space(12.0);
+                // ── Tab bar ──────────────────────────────────────────────────
+                ui.horizontal(|ui| {
+                    for (idx, label) in ["About & Shortcuts", "Author"].iter().enumerate() {
+                        let active = self.about_tab == idx;
+                        let btn = egui::Button::new(
+                            egui::RichText::new(*label).strong()
+                        )
+                        .fill(if active {
+                            egui::Color32::from_rgb(0, 90, 180)
+                        } else {
+                            ui.visuals().widgets.inactive.bg_fill
+                        });
+                        if ui.add(btn).clicked() {
+                            self.about_tab = idx;
+                        }
+                    }
                 });
-
                 ui.separator();
-                ui.add_space(6.0);
 
-                egui::Grid::new("shortcuts_grid")
-                    .num_columns(2)
-                    .spacing([24.0, 4.0])
-                    .striped(true)
-                    .show(ui, |ui| {
-                        let header = |ui: &mut egui::Ui, text: &str| {
-                            ui.label(egui::RichText::new(text).strong().color(egui::Color32::from_rgb(100, 180, 255)));
-                        };
+                match self.about_tab {
+                    // ── Tab 0: About & Shortcuts ─────────────────────────────
+                    0 => {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new("🎨 Void Canvas")
+                                    .size(28.0)
+                                    .strong(),
+                            );
+                            ui.label(
+                                egui::RichText::new("v1.0.1")
+                                    .size(14.0)
+                                    .color(egui::Color32::from_gray(160)),
+                            );
+                            ui.add_space(4.0);
+                            ui.label("ASCII art editor with layers, history & rich tools.");
+                            ui.add_space(12.0);
+                        });
 
-                        header(ui, "── File ──");
-                        ui.end_row();
-                        ui.label("Ctrl+N"); ui.label("New document"); ui.end_row();
-                        ui.label("Ctrl+O"); ui.label("Open…"); ui.end_row();
-                        ui.label("Ctrl+S"); ui.label("Save / Save as…"); ui.end_row();
+                        ui.separator();
+                        ui.add_space(6.0);
 
-                        ui.add_space(4.0); ui.end_row();
-                        header(ui, "── Edit ──");
-                        ui.end_row();
-                        ui.label("Ctrl+Z"); ui.label("Undo"); ui.end_row();
-                        ui.label("Ctrl+Y"); ui.label("Redo"); ui.end_row();
-                        ui.label("Ctrl+C"); ui.label("Copy selection "); ui.end_row();
-                        ui.label("Ctrl+X"); ui.label("Cut selection "); ui.end_row();
-                        ui.label("Ctrl+V"); ui.label("Paste at cursor "); ui.end_row();
-                        ui.label("Delete");  ui.label("Delete selection"); ui.end_row();
-                        ui.label("Escape");  ui.label("Deselect"); ui.end_row();
-                        ui.label("X");       ui.label("Swap primary / secondary"); ui.end_row();
+                        egui::Grid::new("shortcuts_grid")
+                            .num_columns(2)
+                            .spacing([24.0, 4.0])
+                            .striped(true)
+                            .show(ui, |ui| {
+                                let header = |ui: &mut egui::Ui, text: &str| {
+                                    ui.label(egui::RichText::new(text).strong().color(egui::Color32::from_rgb(100, 180, 255)));
+                                };
 
-                        ui.add_space(4.0); ui.end_row();
-                        header(ui, "── Tools ──");
-                        ui.end_row();
-                        ui.label("B"); ui.label("Brush"); ui.end_row();
-                        ui.label("E"); ui.label("Eraser"); ui.end_row();
-                        ui.label("F"); ui.label("Fill"); ui.end_row();
-                        ui.label("R"); ui.label("Rectangle"); ui.end_row();
-                        ui.label("O"); ui.label("Ellipse"); ui.end_row();
-                        ui.label("L"); ui.label("Line"); ui.end_row();
-                        ui.label("D"); ui.label("Border box"); ui.end_row();
-                        ui.label("S"); ui.label("Select"); ui.end_row();
+                                header(ui, "── File ──");
+                                ui.end_row();
+                                ui.label("Ctrl+N"); ui.label("New document"); ui.end_row();
+                                ui.label("Ctrl+O"); ui.label("Open…"); ui.end_row();
+                                ui.label("Ctrl+S"); ui.label("Save / Save as…"); ui.end_row();
 
-                        ui.add_space(4.0); ui.end_row();
-                        header(ui, "── Canvas ──");
-                        ui.end_row();
-                        ui.label("Scroll");        ui.label("Pan canvas"); ui.end_row();
-                        ui.label("Ctrl+Scroll");   ui.label("Zoom in / out"); ui.end_row();
-                        ui.label("+  /  –");        ui.label("Brush size up / down"); ui.end_row();
-                    });
+                                ui.add_space(4.0); ui.end_row();
+                                header(ui, "── Edit ──");
+                                ui.end_row();
+                                ui.label("Ctrl+Z"); ui.label("Undo"); ui.end_row();
+                                ui.label("Ctrl+Y"); ui.label("Redo"); ui.end_row();
+                                ui.label("Ctrl+C"); ui.label("Copy selection"); ui.end_row();
+                                ui.label("Ctrl+X"); ui.label("Cut selection"); ui.end_row();
+                                ui.label("Ctrl+V"); ui.label("Paste at cursor"); ui.end_row();
+                                ui.label("Delete");  ui.label("Delete selection"); ui.end_row();
+                                ui.label("Escape");  ui.label("Deselect"); ui.end_row();
+                                ui.label("X");       ui.label("Swap primary / secondary"); ui.end_row();
 
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(4.0);
-                ui.vertical_centered(|ui| {
-                    ui.label(
-                        egui::RichText::new("Built with Rust · egui · eframe")
-                            .size(11.0)
-                            .color(egui::Color32::from_gray(120)),
-                    );
-                });
+                                ui.add_space(4.0); ui.end_row();
+                                header(ui, "── Tools ──");
+                                ui.end_row();
+                                ui.label("B"); ui.label("Brush"); ui.end_row();
+                                ui.label("E"); ui.label("Eraser"); ui.end_row();
+                                ui.label("F"); ui.label("Fill"); ui.end_row();
+                                ui.label("R"); ui.label("Rectangle"); ui.end_row();
+                                ui.label("O"); ui.label("Ellipse"); ui.end_row();
+                                ui.label("L"); ui.label("Line"); ui.end_row();
+                                ui.label("D"); ui.label("Border box"); ui.end_row();
+                                ui.label("S"); ui.label("Select"); ui.end_row();
+
+                                ui.add_space(4.0); ui.end_row();
+                                header(ui, "── Canvas ──");
+                                ui.end_row();
+                                ui.label("Scroll");      ui.label("Pan canvas"); ui.end_row();
+                                ui.label("Ctrl+Scroll"); ui.label("Zoom in / out"); ui.end_row();
+                                ui.label("+  /  –");      ui.label("Brush size up / down"); ui.end_row();
+                            });
+
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                egui::RichText::new("Built with Rust · egui · eframe")
+                                    .size(11.0)
+                                    .color(egui::Color32::from_gray(120)),
+                            );
+                        });
+                    }
+
+                    // ── Tab 1: Author ────────────────────────────────────────
+                    _ => {
+                        ui.add_space(12.0);
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                egui::RichText::new("✏ Author")
+                                    .size(22.0)
+                                    .strong(),
+                            );
+                        });
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+
+                        // ── Fill in your own details below ──────────────────
+                        egui::Grid::new("author_grid")
+                            .num_columns(2)
+                            .spacing([16.0, 6.0])
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new("Name").strong());
+                                ui.label("Fantomm");
+                                ui.end_row();
+
+                                ui.label(egui::RichText::new("GitHub").strong());
+                                ui.label("https://github.com/fantommripper");
+                                ui.end_row();
+
+                                ui.label(egui::RichText::new("License").strong());
+                                ui.label("Modified MIT");
+                                ui.end_row();
+                            });
+
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new("Did you actually go to that tab? Okay, thanks for that! From here on out, I'll switch to a language I'm more comfortable using, but trust me, there's nothing important there.")
+                                .size(11.0)
+                                .color(egui::Color32::from_gray(100))
+                                .italics(),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new("Чтож, если вы нарисуете хоть один рисунок в этой программе, вы меня уже очень обрадуете! Честно говоря, это, наверное, самое интересное, что я смог сделать. Я благодарен всем разработчикам инструментов, которые помогли мне в этом. Хотя я чувствую себя паршиво за использование ИИ в этом проекте. Да, конечно, вою архитектуру придумал я, выбрал инструменты я... но код всё же я своим не считаю. Я вносил правки, но это только правки. Мне не нравится, что люди думают, будто я \"отличный программист\", предполагают, что я \"мидл\", и так далее... Да, я что-то знаю и понимаю, что пишет ИИ и как этот код работает, но всё же лично я не считаю себя программистом. Если вы дочитали до сюда, я ещё раз поблагодарю за всё! А сейчас я пойду и выпью таблетки, пока я снова не придумал очередной никому не нужный проект)")
+                                .size(11.0)
+                                .color(egui::Color32::from_gray(100))
+                                .italics(),
+                        );
+                    }
+                }
             });
         self.show_about_dialog = open;
     }
+
+    // ── Export ───────────────────────────────────────────────────────────────
 
     fn export_text(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
@@ -467,9 +543,108 @@ impl AsciiArtEditor {
             let text = self.doc.to_text();
             if std::fs::write(&path, text).is_ok() {
                 self.show_status(format!("Exported to {:?}", path));
+            } else {
+                self.show_status("Export failed!");
             }
         }
     }
+
+    fn export_png(&mut self) {
+        use ab_glyph::{Font, FontRef, PxScale};
+        use image::{ImageBuffer, Rgba};
+
+        let cell_w: u32 = 10;
+        let cell_h: u32 = 18;
+        let img_w = self.doc.width  as u32 * cell_w;
+        let img_h = self.doc.height as u32 * cell_h;
+
+        let font_bytes = include_bytes!("assets/FiraCode.ttf");
+        let font = match FontRef::try_from_slice(font_bytes) {
+            Ok(f) => f,
+            Err(e) => {
+                self.show_status(format!("PNG export: font error – {e}"));
+                return;
+            }
+        };
+        let scale = PxScale::from(cell_h as f32 * 0.82);
+
+        let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(img_w, img_h, Rgba([0, 0, 0, 255]));
+
+        for cy in 0..self.doc.height {
+            for cx in 0..self.doc.width {
+                let px_base = cx as u32 * cell_w;
+                let py_base = cy as u32 * cell_h;
+
+                let Some(cell) = self.doc.composite_cell(cx, cy) else { continue };
+
+                if !cell.bg.is_transparent() {
+                    let [r, g, b, a] = [cell.bg.r, cell.bg.g, cell.bg.b, cell.bg.a];
+                    for dy in 0..cell_h {
+                        for dx in 0..cell_w {
+                            img.put_pixel(px_base + dx, py_base + dy, Rgba([r, g, b, a]));
+                        }
+                    }
+                }
+
+                if cell.ch != ' ' {
+                    let glyph_id = font.glyph_id(cell.ch);
+                    let glyph = glyph_id.with_scale_and_position(
+                        scale,
+                        ab_glyph::point(0.0, {
+                            use ab_glyph::ScaleFont;
+                            font.as_scaled(scale).ascent()
+                        }),
+                    );
+
+                    if let Some(outlined) = font.outline_glyph(glyph) {
+                        let bounds = outlined.px_bounds();
+                        let g_w = bounds.width()  as u32;
+                        let x_off = ((cell_w as i32) - (g_w as i32)) / 2 + bounds.min.x as i32;
+                        let y_off = bounds.min.y as i32;
+
+                        let [fr, fg_c, fb, _] = [cell.fg.r, cell.fg.g, cell.fg.b, cell.fg.a];
+
+                        outlined.draw(|gx, gy, cov| {
+                            if cov < 0.01 { return; }
+                            let sx = px_base as i32 + gx as i32 + x_off;
+                            let sy = py_base as i32 + gy as i32 + y_off;
+                            if sx < 0 || sy < 0 { return; }
+                            let (sx, sy) = (sx as u32, sy as u32);
+                            if sx >= img_w || sy >= img_h { return; }
+
+                            let bg_px = *img.get_pixel(sx, sy);
+                            let blend = |bg: u8, fg: u8| -> u8 {
+                                ((bg as f32) * (1.0 - cov) + (fg as f32) * cov) as u8
+                            };
+                            img.put_pixel(sx, sy, Rgba([
+                                blend(bg_px[0], fr),
+                                blend(bg_px[1], fg_c),
+                                blend(bg_px[2], fb),
+                                255,
+                            ]));
+                        });
+                    }
+                }
+            }
+        }
+
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("PNG Image", &["png"])
+            .save_file()
+        {
+            let mut path = path;
+            if path.extension().map_or(true, |ext| ext != "png") {
+                path.set_extension("png");
+            }
+            match img.save(&path) {
+                Ok(_) => self.show_status(format!("Exported PNG: {}", path.display())),
+                Err(e) => self.show_status(format!("PNG export failed: {e}")),
+            }
+        }
+    }
+
+    // ── File I/O ─────────────────────────────────────────────────────────────
 
     fn save(&mut self) {
         let path = if let Some(p) = &self.doc.file_path {
@@ -527,6 +702,8 @@ impl AsciiArtEditor {
     }
 }
 
+// ── eframe::App ──────────────────────────────────────────────────────────────
+
 impl eframe::App for AsciiArtEditor {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let dt = ctx.input(|i| i.unstable_dt);
@@ -540,16 +717,16 @@ impl eframe::App for AsciiArtEditor {
         }
 
         self.handle_keyboard(ctx);
-
         self.new_doc_dialog(ctx);
         self.resize_dialog(ctx);
         self.about_dialog(ctx);
 
+        // ── Menu bar ─────────────────────────────────────────────────────────
         egui::TopBottomPanel::top("menu").show(ctx, |ui| {
             menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("New…       Ctrl+N").clicked() {
-                        self.new_width = self.doc.width;
+                        self.new_width  = self.doc.width;
                         self.new_height = self.doc.height;
                         self.show_new_dialog = true;
                         ui.close_menu();
@@ -558,6 +735,7 @@ impl eframe::App for AsciiArtEditor {
                     if ui.button("Save        Ctrl+S").clicked() { self.save(); ui.close_menu(); }
                     ui.separator();
                     if ui.button("Export Text…").clicked() { self.export_text(); ui.close_menu(); }
+                    if ui.button("Export PNG…").clicked()  { self.export_png();  ui.close_menu(); }
                     ui.separator();
                     if ui.button("Quit").clicked() { std::process::exit(0); }
                 });
@@ -572,10 +750,10 @@ impl eframe::App for AsciiArtEditor {
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("Copy    Ctrl+C").clicked() { self.copy(); ui.close_menu(); }
-                    if ui.button("Cut     Ctrl+X").clicked() { self.cut(); ui.close_menu(); }
-                    if ui.button("Paste   Ctrl+V").clicked() { self.paste(); ui.close_menu(); }
-                    if ui.button("Delete").clicked() { self.delete_selection(); ui.close_menu(); }
+                    if ui.button("Copy    Ctrl+C").clicked() { self.copy();             ui.close_menu(); }
+                    if ui.button("Cut     Ctrl+X").clicked() { self.cut();              ui.close_menu(); }
+                    if ui.button("Paste   Ctrl+V").clicked() { self.paste();            ui.close_menu(); }
+                    if ui.button("Delete").clicked()         { self.delete_selection(); ui.close_menu(); }
                     ui.separator();
                     if ui.button("Clear Layer").clicked() {
                         self.doc.active_layer_mut().clear();
@@ -586,7 +764,7 @@ impl eframe::App for AsciiArtEditor {
 
                 ui.menu_button("Canvas", |ui| {
                     if ui.button("Resize…").clicked() {
-                        self.new_width = self.doc.width;
+                        self.new_width  = self.doc.width;
                         self.new_height = self.doc.height;
                         self.show_resize_dialog = true;
                         ui.close_menu();
@@ -611,11 +789,13 @@ impl eframe::App for AsciiArtEditor {
                 });
 
                 ui.menu_button("Help", |ui| {
-                    if ui.button("About").clicked() {
+                    if ui.button("Keyboard Shortcuts").clicked() {
+                        self.about_tab = 0;
                         self.show_about_dialog = true;
                         ui.close_menu();
                     }
-                    if ui.button("Keyboard Shortcuts").clicked() {
+                    if ui.button("Author").clicked() {
+                        self.about_tab = 1;
                         self.show_about_dialog = true;
                         ui.close_menu();
                     }
@@ -623,6 +803,7 @@ impl eframe::App for AsciiArtEditor {
             });
         });
 
+        // ── Status bar ───────────────────────────────────────────────────────
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if let Some((x, y)) = self.canvas_state.cursor_cell {
@@ -637,7 +818,7 @@ impl eframe::App for AsciiArtEditor {
                 ui.separator();
                 let layer = self.doc.active_layer();
                 ui.label(format!("Layer: {}", layer.name));
-                if layer.locked { ui.label("🔒"); }
+                if layer.locked   { ui.label("🔒"); }
                 if !layer.visible { ui.label("👁‍🗨"); }
 
                 if self.status_timer > 0.0 {
@@ -654,6 +835,7 @@ impl eframe::App for AsciiArtEditor {
             });
         });
 
+        // ── Left toolbar ─────────────────────────────────────────────────────
         egui::SidePanel::left("toolbar")
             .resizable(false)
             .exact_width(44.0)
@@ -663,14 +845,19 @@ impl eframe::App for AsciiArtEditor {
                     for &tool in ToolType::all() {
                         let is_active = self.active_tool == tool;
                         let btn = egui::Button::new(
-                            RichText::new(tool.label())
-                                .strong()
-                                .size(24.0)
+                            RichText::new(tool.label()).strong().size(24.0)
                         )
                         .min_size(Vec2::splat(36.0))
-                        .fill(if is_active { Color32::from_rgb(0, 120, 212) } else { Color32::from_gray(60) });
+                        .fill(if is_active {
+                            Color32::from_rgb(0, 120, 212)
+                        } else {
+                            Color32::from_gray(60)
+                        });
 
-                        if ui.add(btn).on_hover_text(format!("{} ({})", tool.name(), tool.label())).clicked() {
+                        if ui.add(btn)
+                            .on_hover_text(format!("{} ({})", tool.name(), tool.label()))
+                            .clicked()
+                        {
                             self.active_tool = tool;
                         }
                         ui.add_space(2.0);
@@ -680,11 +867,14 @@ impl eframe::App for AsciiArtEditor {
 
                     let grid_icon = if self.canvas_state.show_grid { "#" } else { "·" };
                     let grid_btn = egui::Button::new(
-                        RichText::new(grid_icon).strong()
-                            .size(24.0)
+                        RichText::new(grid_icon).strong().size(24.0)
                     )
                     .min_size(Vec2::splat(36.0))
-                    .fill(if self.canvas_state.show_grid { Color32::from_gray(80) } else { Color32::from_gray(50) });
+                    .fill(if self.canvas_state.show_grid {
+                        Color32::from_gray(80)
+                    } else {
+                        Color32::from_gray(50)
+                    });
 
                     if ui.add(grid_btn).on_hover_text("Toggle Grid").clicked() {
                         self.canvas_state.show_grid = !self.canvas_state.show_grid;
@@ -692,6 +882,7 @@ impl eframe::App for AsciiArtEditor {
                 });
             });
 
+        // ── Right: layers panel ───────────────────────────────────────────────
         egui::SidePanel::right("layers")
             .resizable(true)
             .default_width(220.0)
@@ -702,64 +893,35 @@ impl eframe::App for AsciiArtEditor {
 
                 if let Some(action) = self.layer_panel.show(ui, &self.doc) {
                     match action {
-                        LayerAction::Select(i) => {
-                            self.doc.active_layer = i;
-                            ctx.request_repaint();
-                        }
-                        LayerAction::Add => {
-                            self.doc.add_layer();
-                            ctx.request_repaint();
-                        }
-                        LayerAction::Remove => {
-                            self.doc.remove_layer();
-                            ctx.request_repaint();
-                        }
-                        LayerAction::Duplicate => {
-                            self.doc.duplicate_layer();
-                            ctx.request_repaint();
-                        }
-                        LayerAction::MergeDown => {
-                            self.doc.merge_down();
-                            ctx.request_repaint();
-                        }
+                        LayerAction::Select(i) => { self.doc.active_layer = i; }
+                        LayerAction::Add       => { self.doc.add_layer(); }
+                        LayerAction::Remove    => { self.doc.remove_layer(); }
+                        LayerAction::Duplicate => { self.doc.duplicate_layer(); }
+                        LayerAction::MergeDown => { self.doc.merge_down(); }
                         LayerAction::MoveUp => {
                             let i = self.doc.active_layer;
-                            if i + 1 < self.doc.layers.len() {
-                                self.doc.move_layer(i, i + 1);
-                            }
-                            ctx.request_repaint();
+                            if i + 1 < self.doc.layers.len() { self.doc.move_layer(i, i + 1); }
                         }
                         LayerAction::MoveDown => {
                             let i = self.doc.active_layer;
-                            if i > 0 {
-                                self.doc.move_layer(i, i - 1);
-                            }
-                            ctx.request_repaint();
+                            if i > 0 { self.doc.move_layer(i, i - 1); }
                         }
-                        LayerAction::ToggleVisible(i) => {
-                            self.doc.layers[i].visible = !self.doc.layers[i].visible;
-                            ctx.request_repaint();
-                        }
-                        LayerAction::ToggleLock(i) => {
-                            self.doc.layers[i].locked = !self.doc.layers[i].locked;
-                            ctx.request_repaint();
-                        }
-                        LayerAction::Rename(i, name) => {
-                            if i < self.doc.layers.len() {
-                                self.doc.layers[i].name = name;
-                            }
-                            ctx.request_repaint();
+                        LayerAction::ToggleVisible(i) => { self.doc.layers[i].visible = !self.doc.layers[i].visible; }
+                        LayerAction::ToggleLock(i)    => { self.doc.layers[i].locked  = !self.doc.layers[i].locked; }
+                        LayerAction::Rename(i, name)  => {
+                            if i < self.doc.layers.len() { self.doc.layers[i].name = name; }
                         }
                         LayerAction::Reorder(from, to) => {
                             if from < self.doc.layers.len() && to < self.doc.layers.len() {
                                 self.doc.move_layer(from, to);
                             }
-                            ctx.request_repaint();
                         }
                     }
+                    ctx.request_repaint();
                 }
             });
 
+        // ── Left: inspector panel ─────────────────────────────────────────────
         egui::SidePanel::left("left_panel")
             .resizable(true)
             .default_width(280.0)
@@ -787,6 +949,7 @@ impl eframe::App for AsciiArtEditor {
                 });
             });
 
+        // ── Central canvas ───────────────────────────────────────────────────
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(Color32::from_gray(28)))
             .show(ctx, |ui| {

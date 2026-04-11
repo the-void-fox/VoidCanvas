@@ -1,0 +1,10 @@
+{
+    "nixEnvSelector.nixFile": "${workspaceFolder}/shell.nix",
+    "cSpell.words": [
+        "eframe",
+        "egui",
+        "Fira",
+        "rasterised",
+        "serde"
+    ]
+}

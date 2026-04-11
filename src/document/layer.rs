@@ -67,7 +67,7 @@ impl Layer {
             }
         }
         self.cells = new_cells;
-        self.width = new_w;
+        self.width  = new_w;
         self.height = new_h;
     }
 
@@ -81,18 +81,5 @@ impl Layer {
                     .collect()
             })
             .collect()
-    }
-
-    pub fn paste_region(&mut self, x: usize, y: usize, region: &[Vec<Cell>]) {
-        if self.locked { return; }
-        for (dy, row) in region.iter().enumerate() {
-            for (dx, cell) in row.iter().enumerate() {
-                self.set(x + dx, y + dy, cell.clone());
-            }
-        }
-    }
-
-    pub fn cells(&self) -> &[Cell] {
-        &self.cells
     }
 }
