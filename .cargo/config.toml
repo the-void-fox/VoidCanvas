@@ -1,0 +1,11 @@
+# .cargo/config.toml
+
+# Windows через Zig-линкер (cargo-zigbuild сам его подставляет,
+# но явный linker помогает IDE и rust-analyzer)
+[target.x86_64-pc-windows-gnu]
+rustflags = [
+  # Скрываем консольное окно (дублирует cfg_attr в main.rs)
+  "-C", "link-args=-mwindows",
+  # Статически линкуем libgcc — убирает зависимость от mingw DLL
+  "-C", "link-args=-static-libgcc",
+]
