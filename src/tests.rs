@@ -321,6 +321,34 @@ mod ui {
     }
 
     #[test]
+    fn typing_writes_text_and_undoes_in_one_step() {
+        let mut harness = harness();
+        harness.state_mut().active_tool = ToolType::Text;
+        let pos = cell_pos(&harness, 2, 2);
+        harness.hover_at(pos);
+        harness.step();
+        harness.event(button(pos, true));
+        harness.event(button(pos, false));
+        harness.step();
+
+        harness.event(Event::Text("He".into()));
+        harness.key_press(egui::Key::E);
+        harness.step();
+        harness.key_press(egui::Key::Enter);
+        harness.event(Event::Text("x".into()));
+        harness.step();
+
+        assert_eq!(harness.state().active_tool, ToolType::Text, "letters don't switch tools while typing");
+        let row: String = (2..4).map(|x| glyph_at(&harness, x, 2)).collect();
+        assert_eq!(row, "He");
+        assert_eq!(glyph_at(&harness, 2, 3), 'x', "Enter returns to the starting column");
+
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::Z);
+        harness.step();
+        assert!([(2, 2), (3, 2), (2, 3)].iter().all(|&(x, y)| glyph_at(&harness, x, y) == ' '));
+    }
+
+    #[test]
     fn dialogs_and_dock_tabs_render() {
         let mut harness = harness();
         harness.state_mut().show_about_dialog = true;

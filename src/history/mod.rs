@@ -2,12 +2,14 @@ pub mod commands;
 pub use commands::Command;
 
 use std::collections::VecDeque;
-use crate::document::{Changes, Document};
+use crate::document::{Changes, Document, merge_changes};
 
 pub struct History {
     pub max_size: usize,
     undo_stack: VecDeque<Command>,
     redo_stack: Vec<Command>,
+    /// Group of the newest command, if it may still absorb more changes.
+    open_group: Option<u64>,
 }
 
 impl History {
@@ -16,6 +18,7 @@ impl History {
             max_size,
             undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
+            open_group: None,
         }
     }
 
@@ -26,6 +29,22 @@ impl History {
             self.undo_stack.pop_front();
         }
         self.redo_stack.clear();
+        self.open_group = None;
+    }
+
+    /// Records drawn changes; consecutive pushes with the same `group`
+    /// (e.g. one typing session) become a single undo step.
+    pub fn push_grouped(&mut self, layer_idx: usize, changes: Changes, group: u64) {
+        if self.open_group == Some(group)
+            && let Some(Command::Draw { layer_idx: top_layer, changes: top }) = self.undo_stack.back_mut()
+            && *top_layer == layer_idx
+        {
+            merge_changes(top, changes);
+            self.redo_stack.clear();
+            return;
+        }
+        self.push(Command::Draw { layer_idx, changes });
+        self.open_group = Some(group);
     }
 
     /// Applies a command to the document and records it.
@@ -35,6 +54,7 @@ impl History {
     }
 
     pub fn undo(&mut self, doc: &mut Document) -> bool {
+        self.open_group = None;
         if let Some(cmd) = self.undo_stack.pop_back() {
             apply_inverse(&cmd, doc);
             self.redo_stack.push(cmd);
@@ -45,6 +65,7 @@ impl History {
     }
 
     pub fn redo(&mut self, doc: &mut Document) -> bool {
+        self.open_group = None;
         if let Some(cmd) = self.redo_stack.pop() {
             apply_command(&cmd, doc);
             self.undo_stack.push_back(cmd);
@@ -60,6 +81,7 @@ impl History {
     pub fn clear(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
+        self.open_group = None;
     }
 }
 

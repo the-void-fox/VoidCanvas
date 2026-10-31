@@ -9,6 +9,12 @@ pub const ELLIPSE: &str = "\u{F0EA1}";
 pub const BORDER: &str = "\u{F00CE}";
 pub const SELECT: &str = "\u{F0489}";
 pub const EYEDROPPER: &str = "\u{F020A}";
+pub const TEXT: &str = "\u{F0284}";
+pub const FLIP_H: &str = "\u{F10E7}";
+pub const FLIP_V: &str = "\u{F10E8}";
+pub const ROTATE_LEFT: &str = "\u{F0465}";
+pub const ROTATE_RIGHT: &str = "\u{F0467}";
+pub const HISTORY: &str = "\u{F02DA}";
 
 pub const EYE: &str = "\u{F0208}";
 pub const EYE_OFF: &str = "\u{F0209}";

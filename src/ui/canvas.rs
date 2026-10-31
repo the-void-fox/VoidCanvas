@@ -229,6 +229,19 @@ pub fn draw_canvas(
     }
 
     draw_selection(tools, state, &painter, origin, ppp);
+
+    // Text cursor: an outlined cell with a blinking bar.
+    if active_tool == ToolType::Text
+        && let Some((cx, cy)) = tools.text.cursor
+    {
+        let rect = snap(state.cell_rect(cx, cy, origin));
+        painter.rect_stroke(rect, 0.0, Stroke::new(1.0, theme::ACCENT), StrokeKind::Inside);
+        if (ui.input(|i| i.time) * 2.0) as i64 % 2 == 0 {
+            let bar = Rect::from_min_max(pos2(rect.min.x, rect.max.y - 2.0), rect.max);
+            painter.rect_filled(bar, 0.0, theme::ACCENT);
+        }
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+    }
     painter.rect_stroke(snap(canvas_rect), 0.0, Stroke::new(1.0, theme::BORDER_STRONG), StrokeKind::Outside);
 
     if resp.contains_pointer() {
@@ -241,6 +254,8 @@ pub fn draw_canvas(
             CursorIcon::Grab
         } else if moving {
             CursorIcon::Move
+        } else if active_tool == ToolType::Text {
+            CursorIcon::Text
         } else {
             CursorIcon::Crosshair
         });

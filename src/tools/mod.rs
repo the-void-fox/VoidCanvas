@@ -4,14 +4,16 @@ pub mod fill;
 pub mod shapes;
 pub mod border;
 pub mod selection;
+pub mod text;
 
 use crate::document::{Cell, Color, Document};
 use crate::icons;
-pub use crate::document::Changes;
+pub use crate::document::{Changes, merge_changes};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToolType {
     Brush,
+    Text,
     Eyedropper,
     Eraser,
     Fill,
@@ -28,6 +30,7 @@ impl ToolType {
         &[
             &[ToolType::Select],
             &[ToolType::Brush, ToolType::Eraser, ToolType::Fill, ToolType::Eyedropper],
+            &[ToolType::Text],
             &[ToolType::Line, ToolType::Rectangle, ToolType::Ellipse, ToolType::Border],
         ]
     }
@@ -45,6 +48,7 @@ impl ToolType {
     pub fn icon(&self) -> &'static str {
         match self {
             ToolType::Brush     => icons::BRUSH,
+            ToolType::Text      => icons::TEXT,
             ToolType::Eyedropper => icons::EYEDROPPER,
             ToolType::Eraser    => icons::ERASER,
             ToolType::Fill      => icons::FILL,
@@ -60,6 +64,7 @@ impl ToolType {
     pub fn key(&self) -> char {
         match self {
             ToolType::Brush     => 'B',
+            ToolType::Text      => 'T',
             ToolType::Eyedropper => 'I',
             ToolType::Eraser    => 'E',
             ToolType::Fill      => 'F',
@@ -74,6 +79,7 @@ impl ToolType {
     pub fn name(&self) -> &'static str {
         match self {
             ToolType::Brush     => "Brush",
+            ToolType::Text      => "Text",
             ToolType::Eyedropper => "Eyedropper",
             ToolType::Eraser    => "Eraser",
             ToolType::Fill      => "Fill",
@@ -164,15 +170,6 @@ pub fn preview_stamps(doc: &Document, stamps: &[(usize, usize, char)], ctx: &Dra
         .iter()
         .filter_map(|&(x, y, ch)| layer.get(x, y).map(|old| (x, y, ctx.paint(old, ch))))
         .collect()
-}
-
-/// Folds `more` into `into`, keeping the earliest "before" and the latest "after" of each cell.
-pub fn merge_changes(into: &mut Changes, more: Changes) {
-    for (pos, (old, new)) in more {
-        into.entry(pos)
-            .and_modify(|entry| entry.1 = new.clone())
-            .or_insert((old, new));
-    }
 }
 
 /// A `size`×`size` square around (cx, cy); even sizes reach one cell further right / down.

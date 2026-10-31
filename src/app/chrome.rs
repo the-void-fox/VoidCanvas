@@ -152,6 +152,7 @@ impl AsciiArtEditor {
                         ToolType::Line => {}
                         ToolType::Fill => hint(ui, "Fills connected cells that look the same"),
                         ToolType::Eyedropper => hint(ui, "Click: pick into primary · right click: secondary · Alt+click works with any drawing tool"),
+                        ToolType::Text => hint(ui, "Click and type · Enter: next line · Esc: done"),
                         ToolType::Select => {
                             if let Some((x1, y1, x2, y2)) = self.tools.selection.selection {
                                 let info = format!("{}×{} at {x1}, {y1}", x2 - x1 + 1, y2 - y1 + 1);
@@ -169,6 +170,7 @@ impl AsciiArtEditor {
                         let verb = match tool {
                             ToolType::Eraser => "Erase",
                             ToolType::Eyedropper => "Pick",
+                            ToolType::Text => "Type",
                             _ => "Paint",
                         };
                         ui.label(verb);

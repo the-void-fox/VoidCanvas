@@ -10,6 +10,7 @@ use crate::tools::{
     fill::FillTool,
     shapes::{Shape, ShapeTool},
     selection::{SelectionTool, content_to_text, text_to_content},
+    text::TextTool,
 };
 mod chrome;
 mod dialogs;
@@ -31,6 +32,7 @@ pub struct ToolState {
     pub fill:      FillTool,
     pub shape:     ShapeTool,
     pub selection: SelectionTool,
+    pub text:      TextTool,
 }
 
 impl Default for ToolState {
@@ -41,6 +43,7 @@ impl Default for ToolState {
             fill:      FillTool::default(),
             shape:     ShapeTool::default(),
             selection: SelectionTool::default(),
+            text:      TextTool::default(),
         }
     }
 }
@@ -186,6 +189,11 @@ impl AsciiArtEditor {
                     return;
                 }
 
+                if tool == ToolType::Text {
+                    self.tools.text.start(x, y, !primary);
+                    return;
+                }
+
                 let edits = tool != ToolType::Select || self.tools.selection.hit(x, y);
                 if edits && self.active_layer_locked() { return; }
                 let ctx = self.draw_context(primary);
@@ -274,6 +282,59 @@ impl AsciiArtEditor {
         if channels.bg { *bg = cell.bg; }
     }
 
+    /// The Text tool has a cursor on the canvas: keys go to the text.
+    fn typing(&self) -> bool {
+        self.active_tool == ToolType::Text && self.tools.text.cursor.is_some()
+    }
+
+    /// Text, pasted text and editing keys while typing; one typing session is one undo step.
+    fn handle_typing(&mut self, ctx: &egui::Context) {
+        enum Edit { Text(String), Newline, Backspace, Delete, Move(isize, isize), Stop }
+
+        let edits: Vec<Edit> = ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Text(text) | Event::Paste(text) => Some(Edit::Text(text.clone())),
+                    Event::Key { key, pressed: true, modifiers, .. } if !modifiers.command => match key {
+                        Key::Enter      => Some(Edit::Newline),
+                        Key::Backspace  => Some(Edit::Backspace),
+                        Key::Delete     => Some(Edit::Delete),
+                        Key::ArrowLeft  => Some(Edit::Move(-1, 0)),
+                        Key::ArrowRight => Some(Edit::Move(1, 0)),
+                        Key::ArrowUp    => Some(Edit::Move(0, -1)),
+                        Key::ArrowDown  => Some(Edit::Move(0, 1)),
+                        Key::Escape     => Some(Edit::Stop),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect()
+        });
+        if edits.is_empty() { return; }
+
+        let writes = edits.iter().any(|e| matches!(e, Edit::Text(_) | Edit::Backspace | Edit::Delete));
+        let locked = writes && self.active_layer_locked();
+        let draw = self.draw_context(!self.tools.text.secondary);
+        let text = &mut self.tools.text;
+        let mut changes = Changes::new();
+        for edit in edits {
+            match edit {
+                Edit::Text(t) if !locked => merge_changes(&mut changes, text.type_text(&mut self.doc, &t, &draw)),
+                Edit::Backspace if !locked => merge_changes(&mut changes, text.backspace(&mut self.doc, &draw)),
+                Edit::Delete if !locked => merge_changes(&mut changes, text.erase_at_cursor(&mut self.doc, &draw)),
+                Edit::Newline => text.newline(&self.doc),
+                Edit::Move(dx, dy) => text.move_by(dx, dy, &self.doc),
+                Edit::Stop => text.stop(),
+                _ => {}
+            }
+        }
+        if !changes.is_empty() {
+            self.history.push_grouped(self.doc.active_layer, changes, self.tools.text.group);
+            self.doc.modified = true;
+        }
+    }
+
     /// Swaps the primary and secondary glyph and colours.
     fn swap_slots(&mut self) {
         std::mem::swap(&mut self.primary_char, &mut self.secondary_char);
@@ -284,8 +345,13 @@ impl AsciiArtEditor {
         // Keys typed into a text field (char search, layer rename, …) belong to that field.
         if ctx.text_edit_focused() || self.pending_action.is_some() { return; }
 
+        let typing = self.typing();
+        if typing {
+            self.handle_typing(ctx);
+        }
+
         // Ctrl+C / Ctrl+X / Ctrl+V arrive as Copy / Cut / Paste events, not as key presses.
-        let (copy, cut, paste) = ctx.input(|i| {
+        let (copy, cut, paste) = if typing { (false, false, None) } else { ctx.input(|i| {
             let mut out = (false, false, None);
             for event in &i.events {
                 match event {
@@ -296,7 +362,7 @@ impl AsciiArtEditor {
                 }
             }
             out
-        });
+        }) };
         if copy { self.copy(ctx); }
         if cut { self.cut(ctx); }
         if let Some(text) = paste { self.paste(Some(text)); }
@@ -335,6 +401,9 @@ impl AsciiArtEditor {
         if zoom_out { self.canvas_state.zoom_view_center(1.0 / 1.25); }
         if fit { self.canvas_state.request_fit(); }
         if actual { self.canvas_state.actual_size(); }
+
+        // Letters, Space and Delete belong to the text being typed.
+        if typing { return; }
 
         let tool_keys: Vec<(Key, ToolType)> = ToolType::groups()
             .iter()
@@ -603,6 +672,10 @@ impl eframe::App for AsciiArtEditor {
         self.about_dialog(&ctx);
         self.unsaved_changes_modal(&ctx);
 
+        if self.active_tool != ToolType::Text {
+            self.tools.text.stop();
+        }
+
         // Order matters: panels claim space from the outside in, the canvas gets the rest.
         self.menu_bar(ui);
         self.options_bar(ui);
@@ -617,6 +690,7 @@ impl eframe::App for AsciiArtEditor {
                 let shape = self.shape_for(self.active_tool);
                 // Space + drag pans, like in Photoshop.
                 let pan_mode = !self.drawing
+                    && !self.typing()
                     && !ctx.text_edit_focused()
                     && ctx.input(|i| i.key_down(Key::Space));
                 let events = draw_canvas(
