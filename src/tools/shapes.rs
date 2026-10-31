@@ -1,6 +1,7 @@
 //! Line, rectangle, ellipse and border box: drag from one corner to the other.
 
-use crate::document::{Cell, Document};
+use crate::document::{Cell, Document, Layer};
+use crate::glyphs::{box_arms, from_arms};
 use super::{Changes, DrawContext, apply_stamps, bresenham, border::BorderStyle, preview_stamps};
 
 /// Modifier keys while dragging a shape.
@@ -15,6 +16,8 @@ pub struct ShapeMods {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Shape {
     Line,
+    /// An L-shaped line of box-drawing glyphs that joins existing lines.
+    BoxLine(BorderStyle),
     Rect { filled: bool },
     Ellipse { filled: bool },
     Border(BorderStyle),
@@ -33,15 +36,15 @@ impl ShapeTool {
     pub fn preview(&self, doc: &Document, shape: Shape, end: (usize, usize), mods: ShapeMods, ctx: &DrawContext) -> Vec<(usize, usize, Cell)> {
         let Some(start) = self.start else { return vec![]; };
         let (a, b) = shape_box(shape, start, end, mods, doc);
-        let stamps = ctx.mirror.stamps(stamps(shape, a, b, ctx.current_char()), doc.width, doc.height);
-        preview_stamps(doc, &stamps, ctx)
+        let stamps = stamps(shape, a, b, ctx.current_char(), doc.active_layer());
+        preview_stamps(doc, &ctx.mirror.stamps(stamps, doc.width, doc.height), ctx)
     }
 
     pub fn on_release(&mut self, doc: &mut Document, shape: Shape, end: (usize, usize), mods: ShapeMods, ctx: &DrawContext) -> Changes {
         let Some(start) = self.start.take() else { return Changes::new(); };
         let (a, b) = shape_box(shape, start, end, mods, doc);
-        let stamps = ctx.mirror.stamps(stamps(shape, a, b, ctx.current_char()), doc.width, doc.height);
-        apply_stamps(doc, &stamps, ctx)
+        let stamps = stamps(shape, a, b, ctx.current_char(), doc.active_layer());
+        apply_stamps(doc, &ctx.mirror.stamps(stamps, doc.width, doc.height), ctx)
     }
 }
 
@@ -52,7 +55,7 @@ pub fn shape_box(shape: Shape, start: (usize, usize), end: (usize, usize), mods:
     let (mut dx, mut dy) = (end.0 as isize - sx, end.1 as isize - sy);
 
     if mods.constrain {
-        if shape == Shape::Line {
+        if matches!(shape, Shape::Line | Shape::BoxLine(_)) {
             let (ax, ay) = (dx.abs(), dy.abs());
             if ay * 2 <= ax {
                 dy = 0;
@@ -83,14 +86,94 @@ pub fn shape_box(shape: Shape, start: (usize, usize), end: (usize, usize), mods:
 }
 
 /// Cells of the shape between corners `a` and `b`, with the glyph for each.
-fn stamps(shape: Shape, a: (usize, usize), b: (usize, usize), glyph: char) -> Vec<(usize, usize, char)> {
+/// Box-drawing shapes join the lines already on `layer`.
+fn stamps(shape: Shape, a: (usize, usize), b: (usize, usize), glyph: char, layer: &Layer) -> Vec<(usize, usize, char)> {
     let with_glyph = |points: Vec<(usize, usize)>| points.into_iter().map(|(x, y)| (x, y, glyph)).collect();
     match shape {
         Shape::Line => with_glyph(bresenham(a.0 as isize, a.1 as isize, b.0 as isize, b.1 as isize)),
         Shape::Rect { filled } => with_glyph(rect_points(a.0, a.1, b.0, b.1, filled)),
         Shape::Ellipse { filled } => with_glyph(ellipse_points(a.0, a.1, b.0, b.1, filled)),
-        Shape::Border(style) => style.frame(a, b),
+        Shape::Border(style) => join_lines(frame_arms(a, b, style.weight()), layer, false),
+        Shape::BoxLine(style) => join_lines(path_arms(a, b, style.weight()), layer, true),
     }
+}
+
+const UP: usize = 0;
+const RIGHT: usize = 1;
+const DOWN: usize = 2;
+const LEFT: usize = 3;
+
+/// Arms of every cell on the outline of the box between `a` and `b`.
+fn frame_arms(a: (usize, usize), b: (usize, usize), weight: u8) -> Vec<((usize, usize), [u8; 4])> {
+    let (min_x, max_x) = (a.0.min(b.0), a.0.max(b.0));
+    let (min_y, max_y) = (a.1.min(b.1), a.1.max(b.1));
+    let mut cells = Vec::new();
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let on_side = x == min_x || x == max_x;
+            let on_end = y == min_y || y == max_y;
+            if !on_side && !on_end { continue; }
+            let mut arms = [0; 4];
+            if on_side && y > min_y { arms[UP] = weight; }
+            if on_side && y < max_y { arms[DOWN] = weight; }
+            if on_end && x > min_x { arms[LEFT] = weight; }
+            if on_end && x < max_x { arms[RIGHT] = weight; }
+            if arms != [0; 4] {
+                cells.push(((x, y), arms));
+            }
+        }
+    }
+    cells
+}
+
+/// Arms along an L-shaped path: across to `b`'s column, then up or down to `b`.
+fn path_arms(a: (usize, usize), b: (usize, usize), weight: u8) -> Vec<((usize, usize), [u8; 4])> {
+    let mut path = vec![a];
+    let (mut x, mut y) = a;
+    while x != b.0 {
+        x = if b.0 > x { x + 1 } else { x - 1 };
+        path.push((x, y));
+    }
+    while y != b.1 {
+        y = if b.1 > y { y + 1 } else { y - 1 };
+        path.push((x, y));
+    }
+
+    let toward = |from: (usize, usize), to: (usize, usize)| {
+        if to.0 > from.0 { RIGHT } else if to.0 < from.0 { LEFT } else if to.1 > from.1 { DOWN } else { UP }
+    };
+    if path.len() == 1 {
+        let mut arms = [0; 4];
+        (arms[LEFT], arms[RIGHT]) = (weight, weight);
+        return vec![(a, arms)];
+    }
+    (0..path.len())
+        .map(|i| {
+            let mut arms = [0; 4];
+            if i > 0 { arms[toward(path[i], path[i - 1])] = weight; }
+            if i + 1 < path.len() { arms[toward(path[i], path[i + 1])] = weight; }
+            (path[i], arms)
+        })
+        .collect()
+}
+
+/// Turns arms into glyphs, merged with the box lines already in each cell, so lines that
+/// meet form ├ ┬ ┼. A line's free end with nothing to join runs to the edge of its cell.
+fn join_lines(cells: Vec<((usize, usize), [u8; 4])>, layer: &Layer, extend_ends: bool) -> Vec<(usize, usize, char)> {
+    cells
+        .into_iter()
+        .filter_map(|((x, y), mut arms)| {
+            let existing = layer.get(x, y).and_then(|c| box_arms(c.ch)).unwrap_or([0; 4]);
+            let is_end = arms.iter().filter(|&&w| w > 0).count() == 1;
+            if extend_ends && is_end && existing == [0; 4] {
+                let dir = arms.iter().position(|&w| w > 0).unwrap();
+                arms[(dir + 2) % 4] = arms[dir];
+            }
+            let merged: [u8; 4] = std::array::from_fn(|d| if arms[d] > 0 { arms[d] } else { existing[d] });
+            let ch = from_arms(merged).or_else(|| from_arms(arms))?;
+            Some((x, y, ch))
+        })
+        .collect()
 }
 
 fn rect_points(x1: usize, y1: usize, x2: usize, y2: usize, filled: bool) -> Vec<(usize, usize)> {

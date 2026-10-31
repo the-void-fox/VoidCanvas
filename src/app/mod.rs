@@ -285,6 +285,7 @@ impl AsciiArtEditor {
     fn shape_for(&self, tool: ToolType) -> Option<Shape> {
         let options = &self.tool_options;
         Some(match tool {
+            ToolType::Line if options.line_box => Shape::BoxLine(options.border_style),
             ToolType::Line      => Shape::Line,
             ToolType::Rectangle => Shape::Rect { filled: options.filled },
             ToolType::Ellipse   => Shape::Ellipse { filled: options.filled },

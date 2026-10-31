@@ -625,6 +625,58 @@ mod stage3 {
     }
 }
 
+mod box_lines {
+    use super::{NONE, ctx, red};
+    use crate::document::Document;
+    use crate::tools::border::BorderStyle;
+    use crate::tools::shapes::{Shape, ShapeMods, ShapeTool};
+
+    fn draw(doc: &mut Document, shape: Shape, a: (usize, usize), b: (usize, usize)) {
+        let mut tool = ShapeTool::default();
+        tool.on_press(a.0, a.1);
+        tool.on_release(doc, shape, b, ShapeMods::default(), &ctx('#', red(), NONE));
+    }
+
+    fn rows(doc: &Document) -> Vec<String> {
+        (0..doc.height)
+            .map(|y| (0..doc.width).map(|x| doc.layers[0].get(x, y).unwrap().ch).collect::<String>().trim_end().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn boxes_sharing_an_edge_join() {
+        let mut doc = Document::new(9, 3);
+        let single = Shape::Border(BorderStyle::Single);
+        draw(&mut doc, single, (0, 0), (4, 2));
+        draw(&mut doc, single, (4, 0), (8, 2));
+        assert_eq!(rows(&doc), ["┌───┬───┐", "│   │   │", "└───┴───┘"]);
+    }
+
+    #[test]
+    fn box_lines_turn_and_join_boxes() {
+        let mut doc = Document::new(10, 5);
+        draw(&mut doc, Shape::Border(BorderStyle::Single), (5, 0), (9, 4));
+        draw(&mut doc, Shape::BoxLine(BorderStyle::Single), (0, 2), (5, 2));
+        draw(&mut doc, Shape::BoxLine(BorderStyle::Single), (0, 0), (3, 4));
+        assert_eq!(rows(&doc), [
+            "───┐ ┌───┐",
+            "   │ │   │",
+            "───┼─┤   │",
+            "   │ │   │",
+            "   │ └───┘",
+        ]);
+    }
+
+    #[test]
+    fn double_boxes_join_too() {
+        let mut doc = Document::new(5, 5);
+        let double = Shape::Border(BorderStyle::Double);
+        draw(&mut doc, double, (0, 0), (4, 2));
+        draw(&mut doc, double, (0, 2), (4, 4));
+        assert_eq!(rows(&doc), ["╔═══╗", "║   ║", "╠═══╣", "║   ║", "╚═══╝"]);
+    }
+}
+
 mod glyph_transforms {
     use super::glyph;
     use crate::glyphs::{Transform::*, box_arms, from_arms, transform_block, transform_glyph};

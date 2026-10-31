@@ -176,17 +176,23 @@ impl AsciiArtEditor {
                         ToolType::Rectangle | ToolType::Ellipse => {
                             ui.toggle_value(&mut options.filled, "Filled");
                         }
-                        ToolType::Border => {
+                        ToolType::Border | ToolType::Line => {
                             ui.label("Style");
+                            if tool == ToolType::Line && ui.selectable_label(!options.line_box, "Glyph").clicked() {
+                                options.line_box = false;
+                            }
                             for (style, label) in [
                                 (BorderStyle::Single, "┌─┐  Single"),
                                 (BorderStyle::Double, "╔═╗  Double"),
                                 (BorderStyle::Heavy,  "┏━┓  Heavy"),
                             ] {
-                                ui.selectable_value(&mut options.border_style, style, label);
+                                let on = options.border_style == style && (tool == ToolType::Border || options.line_box);
+                                if ui.selectable_label(on, label).clicked() {
+                                    options.border_style = style;
+                                    options.line_box = true;
+                                }
                             }
                         }
-                        ToolType::Line => {}
                         ToolType::Fill => hint(ui, "Fills connected cells that look the same"),
                         ToolType::Eyedropper => hint(ui, "Click: pick into primary · right click: secondary · Alt+click works with any drawing tool"),
                         ToolType::Text => hint(ui, "Click and type · Enter: next line · Esc: done"),
@@ -246,7 +252,12 @@ impl AsciiArtEditor {
                     }
                     if tool.is_shape() {
                         vdivider(ui);
-                        hint(ui, "Shift: square / straight · Alt: from centre");
+                        let joins = tool == ToolType::Border || (tool == ToolType::Line && self.tool_options.line_box);
+                        hint(ui, if joins {
+                            "Joins existing lines · Shift: square / straight · Alt: from centre"
+                        } else {
+                            "Shift: square / straight · Alt: from centre"
+                        });
                     } else if tool == ToolType::Pixel {
                         vdivider(ui);
                         hint(ui, "Square pixels from half blocks · right button: secondary colour · Alt+click: pick");
