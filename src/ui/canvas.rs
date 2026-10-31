@@ -189,12 +189,13 @@ pub fn draw_canvas(
     }
 
     let font_id = theme::mono(CELL_H * state.zoom);
+    let strokes = glyph_render::Strokes::new(cs.x, ppp);
     for y in y0..y1 {
         for x in x0..x1 {
             let cell = doc.composite_cell(x, y);
             if cell.is_empty() { continue; }
             let rect = snap(state.cell_rect(x, y, origin));
-            draw_cell(&painter, rect, cell.ch, cell.fg.to_egui(), cell.bg.to_egui(), &font_id);
+            draw_cell(&painter, rect, cell.ch, cell.fg.to_egui(), cell.bg.to_egui(), &font_id, strokes);
         }
     }
 
@@ -204,11 +205,11 @@ pub fn draw_canvas(
             let rect = snap(state.cell_rect(*px, *py, origin));
             let bg = Color32::from_rgba_unmultiplied(cell.bg.r, cell.bg.g, cell.bg.b, cell.bg.a / 2);
             let fg = Color32::from_rgba_unmultiplied(cell.fg.r, cell.fg.g, cell.fg.b, 180);
-            draw_cell(&painter, rect, cell.ch, fg, bg, &font_id);
+            draw_cell(&painter, rect, cell.ch, fg, bg, &font_id, strokes);
         }
     }
 
-    draw_moving_selection(tools, doc, state, &painter, origin, &font_id);
+    draw_moving_selection(tools, doc, state, &painter, origin, &font_id, strokes);
 
     // Hovered cell.
     if let Some((cx, cy)) = state.cursor_cell
@@ -218,7 +219,7 @@ pub fn draw_canvas(
         painter.rect_stroke(rect, 0.0, Stroke::new(1.0, theme::ACCENT), StrokeKind::Inside);
     }
 
-    draw_selection(tools, state, &painter, origin, state.march_phase);
+    draw_selection(tools, state, &painter, origin, ppp);
     painter.rect_stroke(snap(canvas_rect), 0.0, Stroke::new(1.0, theme::BORDER_STRONG), StrokeKind::Outside);
 
     if resp.contains_pointer() {
@@ -289,11 +290,11 @@ pub fn draw_canvas(
 }
 
 /// One cell: background, then the glyph (procedurally for box / block / braille characters).
-fn draw_cell(painter: &Painter, rect: Rect, ch: char, fg: Color32, bg: Color32, font_id: &FontId) {
+fn draw_cell(painter: &Painter, rect: Rect, ch: char, fg: Color32, bg: Color32, font_id: &FontId, strokes: glyph_render::Strokes) {
     if bg.a() > 0 {
         painter.rect_filled(rect, 0.0, bg);
     }
-    if ch != ' ' && !glyph_render::draw(painter, ch, rect, fg) {
+    if ch != ' ' && !glyph_render::draw(painter, ch, rect, fg, strokes) {
         painter.text(rect.center(), Align2::CENTER_CENTER, ch, font_id.clone(), fg);
     }
 }
@@ -323,6 +324,7 @@ fn draw_moving_selection(
     painter: &egui::Painter,
     origin: Pos2,
     font_id: &FontId,
+    strokes: glyph_render::Strokes,
 ) {
     let Some((x0, y0, content)) = tools.selection.moving_content() else { return; };
     for (dy, row) in content.iter().enumerate() {
@@ -331,31 +333,33 @@ fn draw_moving_selection(
             if x >= doc.width || y >= doc.height { continue; }
             let rect = glyph_render::snap_rect(state.cell_rect(x, y, origin), painter.pixels_per_point());
             painter.rect_filled(rect, 0.0, theme::CANVAS_BG);
-            draw_cell(painter, rect, cell.ch, cell.fg.to_egui(), cell.bg.to_egui(), font_id);
+            draw_cell(painter, rect, cell.ch, cell.fg.to_egui(), cell.bg.to_egui(), font_id, strokes);
         }
     }
 }
 
+/// The selection: a violet tint and "marching ants" (white dashes on a black line,
+/// visible on any background).
 fn draw_selection(
     tools: &crate::app::ToolState,
     state: &CanvasState,
     painter: &egui::Painter,
     origin: Pos2,
-    phase: f32,
+    ppp: f32,
 ) {
     let Some((x1, y1, x2, y2)) = tools.selection.selection else { return; };
 
     let r1 = state.cell_rect(x1, y1, origin);
     let r2 = state.cell_rect(x2 + 1, y2 + 1, origin);
-    let sel_rect = Rect::from_two_pos(r1.min, r2.min);
+    let sel_rect = glyph_render::snap_rect(Rect::from_two_pos(r1.min, r2.min), ppp);
 
-    let dash = 6.0_f32;
-    let gap  = 4.0_f32;
-    let total = 2.0 * (sel_rect.width() + sel_rect.height());
-    let offset = (phase * total) % (dash + gap);
+    painter.rect_filled(sel_rect, 0.0, theme::SELECTION_TINT);
+    painter.rect_stroke(sel_rect, 0.0, Stroke::new(1.0, Color32::BLACK), StrokeKind::Inside);
 
-    draw_dashed_rect(painter, sel_rect, Color32::WHITE, offset,            dash, gap);
-    draw_dashed_rect(painter, sel_rect, Color32::BLACK, offset + dash + gap, dash, gap);
+    // The ants move at a constant speed, whatever the size of the selection.
+    let (dash, gap) = (6.0_f32, 4.0_f32);
+    let offset = state.march_phase * 4.0 * (dash + gap);
+    draw_dashed_rect(painter, sel_rect.shrink(0.5), Color32::WHITE, offset, dash, gap);
 }
 
 fn draw_dashed_rect(

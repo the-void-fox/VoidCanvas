@@ -9,9 +9,32 @@ pub fn snap_rect(rect: Rect, pixels_per_point: f32) -> Rect {
     Rect::from_min_max(pos2(snap(rect.min.x), snap(rect.min.y)), pos2(snap(rect.max.x), snap(rect.max.y)))
 }
 
+/// Line widths shared by every cell on screen.
+///
+/// Snapped cells differ by a pixel in size (24 vs 25 px at 241 %); deriving widths per cell
+/// would make some columns' lines a pixel thicker, so they come from the nominal cell size.
+#[derive(Clone, Copy)]
+pub struct Strokes {
+    /// Light line width, in physical pixels.
+    light: f32,
+    /// Space between the two strokes of a double line, in physical pixels.
+    gap: f32,
+    /// Braille dot radius, in physical pixels.
+    dot: f32,
+}
+
+impl Strokes {
+    /// For cells `cell_width` points wide (before snapping).
+    pub fn new(cell_width: f32, pixels_per_point: f32) -> Self {
+        let width = cell_width * pixels_per_point;
+        let light = (width / 10.0).round().max(1.0);
+        Self { light, gap: (width / 6.0).round().max(light), dot: (width * 0.14).max(0.6) }
+    }
+}
+
 /// Draws `ch` into the (snapped) cell `rect`. Returns `false` if the font should draw it.
-pub fn draw(painter: &Painter, ch: char, rect: Rect, color: Color32) -> bool {
-    let px = Px::new(painter, rect, color);
+pub fn draw(painter: &Painter, ch: char, rect: Rect, color: Color32, strokes: Strokes) -> bool {
+    let px = Px::new(painter, rect, color, strokes);
     match ch as u32 {
         0x2500..=0x257F => px.box_drawing(ch as usize - 0x2500),
         0x2580..=0x2590 | 0x2594..=0x259F => px.block(ch as u32),
@@ -33,21 +56,18 @@ struct Px<'a> {
     ppp: f32,
     x: (f32, f32),
     y: (f32, f32),
-    /// Thickness of a light line.
     light: f32,
-    /// Space between the two strokes of a double line.
     gap: f32,
+    dot: f32,
 }
 
 impl<'a> Px<'a> {
-    fn new(painter: &'a Painter, rect: Rect, color: Color32) -> Self {
+    fn new(painter: &'a Painter, rect: Rect, color: Color32, strokes: Strokes) -> Self {
         let ppp = painter.pixels_per_point();
         let x = (rect.min.x * ppp, rect.max.x * ppp);
         let y = (rect.min.y * ppp, rect.max.y * ppp);
-        let width = x.1 - x.0;
-        let light = (width / 10.0).round().max(1.0);
-        let gap = (width / 6.0).round().max(light);
-        Self { painter, color, ppp, x, y, light, gap }
+        let Strokes { light, gap, dot } = strokes;
+        Self { painter, color, ppp, x, y, light, gap, dot }
     }
 
     fn fill(&self, x: (f32, f32), y: (f32, f32)) {
@@ -227,7 +247,7 @@ impl<'a> Px<'a> {
         // Bit → (column, row) of the 2×4 dot grid.
         const DOTS: [(f32, f32); 8] = [(0.0, 0.0), (0.0, 1.0), (0.0, 2.0), (1.0, 0.0), (1.0, 1.0), (1.0, 2.0), (0.0, 3.0), (1.0, 3.0)];
         let (w, h) = (self.x.1 - self.x.0, self.y.1 - self.y.0);
-        let radius = (w.min(h / 2.0) * 0.14).max(0.6) / self.ppp;
+        let radius = self.dot / self.ppp;
         for (bit, (col, row)) in DOTS.iter().enumerate() {
             if bits & (1 << bit) != 0 {
                 let center = self.point(self.x.0 + w * (col + 0.5) / 2.0, self.y.0 + h * (row + 0.5) / 4.0);

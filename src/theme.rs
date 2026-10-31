@@ -34,6 +34,8 @@ pub const WARNING: Color32 = Color32::from_rgb(251, 191, 36);
 
 /// Empty canvas cells.
 pub const CANVAS_BG: Color32 = Color32::BLACK;
+/// Tint over the selected area.
+pub const SELECTION_TINT: Color32 = Color32::from_rgba_unmultiplied_const(139, 92, 246, 30);
 pub const GRID: Color32 = Color32::from_rgba_unmultiplied_const(255, 255, 255, 14);
 
 // ── Fonts ────────────────────────────────────────────────────────────────────
