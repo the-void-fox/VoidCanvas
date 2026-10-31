@@ -1,14 +1,44 @@
 use egui::*;
 use crate::document::Color;
+use crate::theme;
 use crate::tools::border::BorderStyle;
+use crate::ui::widgets::{color_chip, parse_hex, section_label, to_hex};
+
+/// One of the four colour slots.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ColorSlot {
+    PrimaryFg,
+    PrimaryBg,
+    SecondaryFg,
+    SecondaryBg,
+}
+
+impl ColorSlot {
+    fn describe(self) -> &'static str {
+        match self {
+            ColorSlot::PrimaryFg   => "Primary · glyph",
+            ColorSlot::PrimaryBg   => "Primary · background",
+            ColorSlot::SecondaryFg => "Secondary · glyph",
+            ColorSlot::SecondaryBg => "Secondary · background",
+        }
+    }
+}
+
+/// 16 VGA colours and a grey ramp.
+const PALETTE: [(u8, u8, u8); 24] = [
+    (0, 0, 0), (170, 0, 0), (0, 170, 0), (170, 85, 0), (0, 0, 170), (170, 0, 170), (0, 170, 170), (170, 170, 170),
+    (85, 85, 85), (255, 85, 85), (85, 255, 85), (255, 255, 85), (85, 85, 255), (255, 85, 255), (85, 255, 255), (255, 255, 255),
+    (18, 18, 24), (38, 38, 50), (64, 64, 80), (96, 96, 118), (128, 128, 148), (167, 139, 250), (124, 77, 255), (228, 228, 238),
+];
 
 pub struct ColorPanel {
     pub primary_fg:   Color,
     pub primary_bg:   Color,
     pub secondary_fg: Color,
     pub secondary_bg: Color,
-    open_picker: Option<String>,
-    picker_color: Color32,
+    /// The slot the picker and the palette edit.
+    pub slot: ColorSlot,
+    hex: String,
 }
 
 impl Default for ColorPanel {
@@ -18,198 +48,123 @@ impl Default for ColorPanel {
             primary_bg:   Color::TRANSPARENT,
             secondary_fg: Color::new(128, 128, 128, 255),
             secondary_bg: Color::TRANSPARENT,
-            open_picker:  None,
-            picker_color: Color32::WHITE,
+            slot:         ColorSlot::PrimaryFg,
+            hex:          String::new(),
         }
     }
 }
 
 impl ColorPanel {
-    pub fn show(&mut self, ui: &mut Ui) {
-        ui.group(|ui| {
-            ui.label("Primary");
-            ui.horizontal(|ui| {
-                ui.label("FG:");
-                if self.color_button(ui, &self.primary_fg.clone(), "pri_fg") {
-                    self.open_picker  = Some("pri_fg".into());
-                    self.picker_color = self.primary_fg.to_egui();
-                }
-                ui.label("BG:");
-                if self.color_button(ui, &self.primary_bg.clone(), "pri_bg") {
-                    self.open_picker  = Some("pri_bg".into());
-                    self.picker_color = self.primary_bg.to_egui();
-                }
-            });
-        });
-
-        ui.add_space(4.0);
-
-        ui.group(|ui| {
-            ui.label("Secondary");
-            ui.horizontal(|ui| {
-                ui.label("FG:");
-                if self.color_button(ui, &self.secondary_fg.clone(), "sec_fg") {
-                    self.open_picker  = Some("sec_fg".into());
-                    self.picker_color = self.secondary_fg.to_egui();
-                }
-                ui.label("BG:");
-                if self.color_button(ui, &self.secondary_bg.clone(), "sec_bg") {
-                    self.open_picker  = Some("sec_bg".into());
-                    self.picker_color = self.secondary_bg.to_egui();
-                }
-            });
-        });
-
-        if let Some(ref target) = self.open_picker.clone() {
-            ui.separator();
-            ui.label(format!("Picking: {target}"));
-
-            egui::color_picker::color_picker_color32(
-                ui,
-                &mut self.picker_color,
-                egui::color_picker::Alpha::OnlyBlend,
-            );
-
-            ui.horizontal(|ui| {
-                if ui.button("Apply").clicked() {
-                    let c = Color::from_egui(self.picker_color);
-                    match target.as_str() {
-                        "pri_fg" => self.primary_fg   = c,
-                        "pri_bg" => self.primary_bg   = c,
-                        "sec_fg" => self.secondary_fg = c,
-                        "sec_bg" => self.secondary_bg = c,
-                        _ => {}
-                    }
-                    self.open_picker = None;
-                }
-                if ui.button("Cancel").clicked() {
-                    self.open_picker = None;
-                }
-            });
-
-            ui.separator();
+    pub fn get(&self, slot: ColorSlot) -> &Color {
+        match slot {
+            ColorSlot::PrimaryFg   => &self.primary_fg,
+            ColorSlot::PrimaryBg   => &self.primary_bg,
+            ColorSlot::SecondaryFg => &self.secondary_fg,
+            ColorSlot::SecondaryBg => &self.secondary_bg,
         }
-
-        ui.add_space(4.0);
-        ui.label("Presets (LClick → primary FG, RClick → secondary FG):");
-
-        let presets: &[(u8, u8, u8)] = &[
-            (255,255,255), (192,192,192), (128,128,128), (0,  0,  0  ),
-            (255,0,  0  ), (128,0,  0  ), (255,255,0  ), (128,128,0  ),
-            (0,  255,0  ), (0,  128,0  ), (0,  255,255), (0,  128,128),
-            (0,  0,  255), (0,  0,  128), (255,0,  255), (128,0,  128),
-        ];
-
-        let cols = 8usize;
-        Grid::new("color_presets").spacing([2.0, 2.0]).show(ui, |ui| {
-            for (i, &(r, g, b)) in presets.iter().enumerate() {
-                if i > 0 && i % cols == 0 {
-                    ui.end_row();
-                }
-                let c32   = Color32::from_rgb(r, g, b);
-                let color = Color::new(r, g, b, 255);
-
-                let (rect, resp) =
-                    ui.allocate_exact_size(Vec2::splat(20.0), Sense::click());
-                ui.painter().rect_filled(rect, 2.0, c32);
-                ui.painter().rect_stroke(
-                    rect,
-                    2.0,
-                    Stroke::new(1.0, Color32::from_gray(80)),
-                    StrokeKind::Inside,
-                );
-                resp.clone().on_hover_text(format!("#{r:02X}{g:02X}{b:02X}"));
-
-                if resp.clicked() {
-                    self.primary_fg = color.clone();
-                }
-                if resp.secondary_clicked() {
-                    self.secondary_fg = color;
-                }
-            }
-        });
     }
 
-    fn color_button(&self, ui: &mut Ui, color: &Color, _id: &str) -> bool {
-        let size = Vec2::new(44.0, 22.0);
-        let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    fn set(&mut self, slot: ColorSlot, color: Color) {
+        *match slot {
+            ColorSlot::PrimaryFg   => &mut self.primary_fg,
+            ColorSlot::PrimaryBg   => &mut self.primary_bg,
+            ColorSlot::SecondaryFg => &mut self.secondary_fg,
+            ColorSlot::SecondaryBg => &mut self.secondary_bg,
+        } = color;
+    }
 
-        if color.a == 0 {
-            let hw = rect.width()  / 2.0;
-            let hh = rect.height() / 2.0;
-            ui.painter().rect_filled(rect, 2.0, Color32::WHITE);
-            for (dx, dy) in [(0.0, 0.0), (hw, hh)] {
-                ui.painter().rect_filled(
-                    Rect::from_min_size(rect.min + Vec2::new(dx, dy), Vec2::new(hw, hh)),
-                    0.0,
-                    Color32::LIGHT_GRAY,
-                );
+    pub fn swap(&mut self) {
+        std::mem::swap(&mut self.primary_fg, &mut self.secondary_fg);
+        std::mem::swap(&mut self.primary_bg, &mut self.secondary_bg);
+    }
+
+    pub fn show(&mut self, ui: &mut Ui) {
+        section_label(ui, "Slots");
+        Grid::new("color_slots").num_columns(3).spacing([10.0, 8.0]).show(ui, |ui| {
+            ui.label("");
+            ui.label(RichText::new("Glyph").small().color(theme::TEXT_DIM));
+            ui.label(RichText::new("Back").small().color(theme::TEXT_DIM));
+            ui.end_row();
+            for (label, fg, bg) in [
+                ("Primary", ColorSlot::PrimaryFg, ColorSlot::PrimaryBg),
+                ("Secondary", ColorSlot::SecondaryFg, ColorSlot::SecondaryBg),
+            ] {
+                ui.label(label);
+                for slot in [fg, bg] {
+                    let chip = color_chip(ui, self.get(slot).to_egui(), vec2(48.0, 24.0), self.slot == slot);
+                    if chip.on_hover_text(slot.describe()).clicked() {
+                        self.slot = slot;
+                    }
+                }
+                ui.end_row();
             }
-        } else {
-            ui.painter().rect_filled(rect, 2.0, color.to_egui());
+        });
+
+        ui.add_space(6.0);
+        section_label(ui, self.slot.describe());
+        let mut color = self.get(self.slot).to_egui();
+        let changed = ui.scope(|ui| {
+            // The picker is a square as wide as the slider width.
+            ui.spacing_mut().slider_width = (ui.available_width() - 20.0).clamp(120.0, 200.0);
+            color_picker::color_picker_color32(ui, &mut color, color_picker::Alpha::OnlyBlend)
+        }).inner;
+        if changed {
+            self.set(self.slot, Color::from_egui(color));
         }
 
-        ui.painter().rect_stroke(
-            rect,
-            2.0,
-            Stroke::new(1.0, Color32::from_gray(100)),
-            StrokeKind::Inside,
-        );
+        let hex_id = ui.make_persistent_id("color_hex");
+        if !ui.memory(|m| m.has_focus(hex_id)) {
+            self.hex = to_hex(self.get(self.slot).to_egui());
+        }
+        ui.horizontal(|ui| {
+            let edit = ui.add(
+                TextEdit::singleline(&mut self.hex)
+                    .id(hex_id)
+                    .font(TextStyle::Monospace)
+                    .desired_width(100.0),
+            );
+            if edit.lost_focus()
+                && let Some(c) = parse_hex(&self.hex)
+            {
+                self.set(self.slot, Color::from_egui(c));
+            }
+            if ui.button("None").on_hover_text("Fully transparent").clicked() {
+                let mut c = self.get(self.slot).clone();
+                c.a = 0;
+                self.set(self.slot, c);
+            }
+        });
 
-        resp.clicked()
+        ui.add_space(6.0);
+        section_label(ui, "Palette");
+        let size = vec2(22.0, 22.0);
+        for row in PALETTE.chunks(8) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                for &(r, g, b) in row {
+                    let c = Color32::from_rgb(r, g, b);
+                    if color_chip(ui, c, size, false).on_hover_text(to_hex(c)).clicked() {
+                        self.set(self.slot, Color::new(r, g, b, 255));
+                    }
+                }
+            });
+        }
     }
 }
 
-pub struct ToolOptionsPanel {
+/// Settings of the drawing tools, edited in the options bar.
+pub struct ToolOptions {
     pub brush_size:    usize,
     pub filled:        bool,
     pub border_style:  BorderStyle,
 }
 
-impl Default for ToolOptionsPanel {
+impl Default for ToolOptions {
     fn default() -> Self {
         Self {
             brush_size:   1,
             filled:       false,
             border_style: BorderStyle::Single,
         }
-    }
-}
-
-impl ToolOptionsPanel {
-    pub fn show(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            ui.label("Brush size:");
-            ui.add(Slider::new(&mut self.brush_size, 1..=20));
-        });
-
-        ui.checkbox(&mut self.filled, "Filled shapes");
-
-        ui.horizontal(|ui| {
-            ui.label("Border:");
-            ComboBox::from_id_salt("border_style")
-                .selected_text(match self.border_style {
-                    BorderStyle::Single => "Single ─│",
-                    BorderStyle::Double => "Double ═║",
-                    BorderStyle::Heavy  => "Heavy  ━┃",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.border_style,
-                        BorderStyle::Single,
-                        "Single ─│",
-                    );
-                    ui.selectable_value(
-                        &mut self.border_style,
-                        BorderStyle::Double,
-                        "Double ═║",
-                    );
-                    ui.selectable_value(
-                        &mut self.border_style,
-                        BorderStyle::Heavy,
-                        "Heavy  ━┃",
-                    );
-                });
-        });
     }
 }

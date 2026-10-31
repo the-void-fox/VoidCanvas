@@ -196,7 +196,7 @@ mod ui {
     fn harness() -> Harness<'static, AsciiArtEditor> {
         let mut harness = Harness::builder()
             .with_size(egui::vec2(1400.0, 900.0))
-            .build_eframe(|_| AsciiArtEditor::default());
+            .build_eframe(|cc| AsciiArtEditor::new(cc));
         harness.step();
         harness.step();
         harness
@@ -259,6 +259,20 @@ mod ui {
         harness.event(Event::Paste("hi".into()));
         harness.step();
         assert_eq!((glyph_at(&harness, 6, 3), glyph_at(&harness, 7, 3)), ('h', 'i'));
+    }
+
+    #[test]
+    fn dialogs_and_dock_tabs_render() {
+        let mut harness = harness();
+        harness.state_mut().show_about_dialog = true;
+        harness.step();
+        harness.state_mut().about_tab = 1;
+        harness.step();
+        harness.state_mut().show_new_dialog = true;
+        harness.state_mut().show_resize_dialog = true;
+        harness.state_mut().dock_tab = crate::app::DockTab::Colors;
+        harness.step();
+        harness.step();
     }
 
     #[test]
@@ -350,4 +364,27 @@ mod minor_fixes {
         let darkest = img.pixels().map(|p| p[0]).min().unwrap();
         assert!(darkest > 200, "a seam between blocks: darkest pixel {darkest}");
     }
+}
+
+/// Renders the whole window offscreen, e.g. for the README screenshot:
+/// `SHOT_DOC=art.vc SHOT_OUT=shot.png cargo test render_window -- --ignored`
+#[test]
+#[ignore = "needs a GPU; run by hand"]
+fn render_window() {
+    use eframe::egui;
+    let out = std::env::var("SHOT_OUT").unwrap_or_else(|_| "screenshot.png".into());
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1600.0, 1000.0))
+        .wgpu()
+        .build_eframe(|cc| {
+            let mut app = crate::app::AsciiArtEditor::new(cc);
+            if let Ok(doc) = std::env::var("SHOT_DOC") {
+                app.open_path(std::path::Path::new(&doc));
+            }
+            app
+        });
+    for _ in 0..5 {
+        harness.step();
+    }
+    harness.render().expect("render").save(out).expect("save");
 }

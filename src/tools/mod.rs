@@ -6,6 +6,7 @@ pub mod border;
 pub mod selection;
 
 use crate::document::Color;
+use crate::icons;
 pub use crate::document::Changes;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -21,29 +22,39 @@ pub enum ToolType {
 }
 
 impl ToolType {
-    pub fn all() -> &'static [ToolType] {
+    /// Tools in toolbar order, split into groups.
+    pub fn groups() -> &'static [&'static [ToolType]] {
         &[
-            ToolType::Brush,
-            ToolType::Eraser,
-            ToolType::Fill,
-            ToolType::Rectangle,
-            ToolType::Ellipse,
-            ToolType::Line,
-            ToolType::Border,
-            ToolType::Select,
+            &[ToolType::Brush, ToolType::Eraser, ToolType::Fill],
+            &[ToolType::Line, ToolType::Rectangle, ToolType::Ellipse, ToolType::Border],
+            &[ToolType::Select],
         ]
     }
 
-    pub fn label(&self) -> &'static str {
+    pub fn icon(&self) -> &'static str {
         match self {
-            ToolType::Brush     => "󰃣",
-            ToolType::Eraser    => "",
-            ToolType::Fill      => "",
-            ToolType::Rectangle => "󰹞",
-            ToolType::Ellipse   => "󰺠",
-            ToolType::Line      => "󰕞",
-            ToolType::Border    => "󰢡",
-            ToolType::Select    => "󰒅",
+            ToolType::Brush     => icons::BRUSH,
+            ToolType::Eraser    => icons::ERASER,
+            ToolType::Fill      => icons::FILL,
+            ToolType::Rectangle => icons::RECTANGLE,
+            ToolType::Ellipse   => icons::ELLIPSE,
+            ToolType::Line      => icons::LINE,
+            ToolType::Border    => icons::BORDER,
+            ToolType::Select    => icons::SELECT,
+        }
+    }
+
+    /// The single-key shortcut that selects the tool.
+    pub fn key(&self) -> char {
+        match self {
+            ToolType::Brush     => 'B',
+            ToolType::Eraser    => 'E',
+            ToolType::Fill      => 'F',
+            ToolType::Rectangle => 'R',
+            ToolType::Ellipse   => 'O',
+            ToolType::Line      => 'L',
+            ToolType::Border    => 'D',
+            ToolType::Select    => 'S',
         }
     }
 

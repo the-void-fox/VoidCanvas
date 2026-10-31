@@ -10,13 +10,14 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 
 | Category | Details |
 |---|---|
-| **Tools** | Brush, Eraser, Flood Fill, Rectangle, Ellipse, Line, Border Box, Selection |
+| **Tools** | Brush, Eraser, Flood Fill, Rectangle, Ellipse, Line, Border Box, Selection — left button draws with the primary slot, right button with the secondary |
 | **Layers** | Add / Remove / Duplicate / Merge Down / Reorder / Rename / Lock / Hide |
 | **History** | 100-step Undo / Redo for drawing, layer operations and canvas resize |
-| **Characters** | 18 built-in palettes (Lines, Blocks, Math, Greek, Arrows, Nerd icons, …) + search |
-| **Colors** | Full RGBA picker, primary & secondary color slots, 16 quick-presets |
-| **Export** | Native `.vc` format (JSON), plain text `.txt`, and rendered **PNG** |
-| **Canvas** | Infinite pan, smooth zoom (0.15× – 8×), optional grid |
+| **Glyphs** | 18 palettes (Lines, Blocks, Math, Greek, Arrows, Nerd icons, …); search by name, code point (`U+2588`) or any typed character |
+| **Colors** | Primary & secondary glyph / background slots, live RGBA picker, hex input, 24-colour palette |
+| **Canvas** | Terminal-style 1:2 cells; box-drawing, block and braille characters are drawn as shapes so they join seamlessly at any zoom; fit / 100 % zoom, optional grid |
+| **Clipboard** | Copy / cut / paste selections, also as plain text to and from other programs |
+| **Export** | Native `.vc` format (JSON), plain text `.txt`, and rendered **PNG** (opaque or transparent) |
 
 ---
 
@@ -77,6 +78,7 @@ cargo build --release
 | `D` | Border Box |
 | `S` | Select |
 | `+` / `-` | Brush size up / down |
+| Right button | Draw with the secondary glyph and colours |
 
 ### Canvas
 
@@ -84,7 +86,9 @@ cargo build --release
 |---|---|
 | Scroll | Pan |
 | `Ctrl` + Scroll | Zoom |
-| `Ctrl` + `+` / `-` / `0` | Zoom in / out / reset |
+| `Ctrl` + `+` / `-` | Zoom in / out |
+| `Ctrl+0` | Fit to window |
+| `Ctrl+1` | Actual size (100 %) |
 | Middle-click drag | Pan |
 
 ---
@@ -118,30 +122,37 @@ Background and foreground RGBA colours are alpha-blended exactly.
 
 ```
 src/
-├── main.rs              Entry point, window setup, font loading
-├── app.rs               Main editor state & event loop
+├── main.rs              Entry point, window setup
+├── theme.rs             Colours, fonts and spacing of the "Void" look
+├── icons.rs             Material Design Icons from the bundled Nerd Font
+├── export.rs            PNG rendering
 ├── tests.rs             Model / history tests + headless UI tests (egui_kittest)
 ├── dev.rs               Debug-only helpers (VOID_CANVAS_SCREENSHOT=out.png)
+├── app/
+│   ├── mod.rs           Editor state, input, editing operations
+│   ├── chrome.rs        Menu, tool options bar, tool strip, dock, status bar
+│   ├── dialogs.rs       New / Resize / About / unsaved-changes dialogs
+│   └── file_io.rs       Open, save, export
 ├── document/
-│   ├── cell.rs          Cell & Color types
+│   ├── cell.rs          Cell & Color types, compositing
 │   ├── layer.rs         Layer (grid of cells)
-│   └── document.rs      Document (layers stack, composite, I/O)
+│   └── document.rs      Document (layer stack, composite, I/O)
 ├── history/
 │   ├── commands.rs      Command enum
 │   └── mod.rs           Undo / Redo stack
-├── tools/
-│   ├── brush.rs         Brush tool
-│   ├── eraser.rs        Eraser tool
-│   ├── fill.rs          Flood-fill tool
-│   ├── shapes.rs        Rectangle, Ellipse, Line tools
-│   ├── border.rs        Border-box tool
-│   └── selection.rs     Rectangular selection + move / copy / paste
+├── tools/               Brush, eraser, fill, shapes, border box, selection
 └── ui/
     ├── canvas.rs         Canvas rendering & input
-    ├── char_palette.rs   Character palette panel
+    ├── glyph_render.rs   Box-drawing / block / braille characters as shapes
+    ├── char_palette.rs   Glyph palette & search
     ├── layer_panel.rs    Layers panel
-    └── panels.rs         Color & Tool Options panels
+    ├── panels.rs         Colour panel, tool options
+    └── widgets.rs        Small custom widgets
 ```
+
+Open a file directly with `void_canvas path/to/art.vc` — try `examples/demo.vc`.
+To re-render the README screenshot offscreen:
+`SHOT_DOC=examples/demo.vc SHOT_OUT=assets/screenshot.png cargo test render_window -- --ignored`.
 
 ---
 
@@ -156,6 +167,9 @@ src/
 | [image](https://crates.io/crates/image) | PNG encoding |
 | [ab_glyph](https://crates.io/crates/ab_glyph) | Font rasterisation for PNG export |
 | [egui_kittest](https://crates.io/crates/egui_kittest) | Headless UI tests (dev only) |
+
+Fonts: [Fira Code](https://github.com/tonsky/FiraCode) (Nerd Font build) for the canvas and icons,
+[Inter](https://github.com/rsms/inter) for the interface — both under the SIL Open Font License.
 
 ---
 

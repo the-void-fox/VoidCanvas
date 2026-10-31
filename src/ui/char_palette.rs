@@ -1,4 +1,6 @@
 use egui::*;
+use crate::icons;
+use crate::theme;
 
 pub const CATEGORIES: &[(&str, &str)] = &[
     ("Basic",
@@ -92,75 +94,76 @@ impl Default for CharPalette {
 }
 
 impl CharPalette {
+    /// Left click picks the primary glyph, right click the secondary one.
     pub fn show(&mut self, ui: &mut Ui, primary_char: &mut char, secondary_char: &mut char) {
-        ui.vertical(|ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (i, (name, _)) in CATEGORIES.iter().enumerate() {
-                    let mut btn = Button::new(*name);
-                    if i == self.category {
-                        btn = btn.fill(ui.visuals().widgets.active.bg_fill);
+        ui.add(
+            TextEdit::singleline(&mut self.search)
+                .hint_text(format!("{}  Search: arrow, 2588, or type a glyph", icons::SEARCH))
+                .desired_width(f32::INFINITY),
+        );
+
+        let searching = !self.search.trim().is_empty();
+        if !searching {
+            ComboBox::from_id_salt("glyph_category")
+                .width(ui.available_width())
+                .selected_text(CATEGORIES[self.category].0)
+                .show_ui(ui, |ui| {
+                    for (i, (name, chars)) in CATEGORIES.iter().enumerate() {
+                        let sample: String = chars.chars().take(6).collect();
+                        ui.selectable_value(&mut self.category, i, format!("{name}   {sample}"));
                     }
-                    if ui.add(btn).clicked() {
-                        self.category = i;
+                });
+        }
+
+        let chars: Vec<char> = if searching {
+            search(&self.search)
+        } else {
+            CATEGORIES[self.category].1.chars().collect()
+        };
+        if chars.is_empty() {
+            ui.label(RichText::new("Nothing found").color(theme::TEXT_FAINT));
+            return;
+        }
+
+        ui.add_space(4.0);
+        const CELL: f32 = 30.0;
+        const GAP: f32 = 4.0;
+        let cols = (((ui.available_width() + GAP) / (CELL + GAP)) as usize).max(1);
+        for row in chars.chunks(cols) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = vec2(GAP, GAP);
+                for &ch in row {
+                    let resp = glyph_cell(ui, ch, CELL, ch == *primary_char, ch == *secondary_char);
+                    if resp.clicked() {
+                        *primary_char = ch;
+                    }
+                    if resp.secondary_clicked() {
+                        *secondary_char = ch;
                     }
                 }
             });
-
-            ui.horizontal(|ui| {
-                ui.label("🔍");
-                ui.text_edit_singleline(&mut self.search);
-            });
-
-            ui.separator();
-
-            let chars: Vec<char> = if self.search.trim().is_empty() {
-                CATEGORIES[self.category].1.chars().collect()
-            } else {
-                search(&self.search)
-            };
-
-            let btn_size = Vec2::splat(36.0);
-            let available_w = ui.available_width();
-            let cols = ((available_w / (btn_size.x + 4.0)) as usize).max(1);
-
-            egui::Grid::new("char_grid")
-                .spacing([2.0, 2.0])
-                .show(ui, |ui| {
-                    for (i, &ch) in chars.iter().enumerate() {
-                        if i > 0 && i % cols == 0 {
-                            ui.end_row();
-                        }
-
-                        let text = RichText::new(ch.to_string())
-                            .size(18.0)
-                            .monospace();
-
-                        let mut btn = Button::new(text)
-                            .min_size(btn_size)
-                            .fill(Color32::from_gray(60));
-
-                        if ch == *primary_char {
-                            btn = btn.fill(Color32::from_rgb(0, 100, 200));
-                        } else if ch == *secondary_char {
-                            btn = btn.fill(Color32::from_rgb(80, 80, 80));
-                        }
-
-                        let resp = ui.add(btn);
-
-                        if resp.clicked() {
-                            *primary_char = ch;
-                        }
-                        if resp.secondary_clicked() {
-                            *secondary_char = ch;
-                        }
-                        if resp.hovered() {
-                            resp.on_hover_text(format!(
-                                "Left click: primary, Right click: secondary\nU+{:04X}",
-                                ch as u32
-                            ));
-                        }
-                    }
-                });
-        });
+        }
     }
+}
+
+/// A clickable glyph tile: filled with the accent if it's the primary glyph, ringed if secondary.
+fn glyph_cell(ui: &mut Ui, ch: char, size: f32, primary: bool, secondary: bool) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let resp = resp.on_hover_text(format!("U+{:04X}\nLeft click: primary · Right click: secondary", ch as u32));
+    if ui.is_rect_visible(rect) {
+        let bg = if primary {
+            theme::ACCENT_STRONG
+        } else if resp.hovered() {
+            theme::SURFACE_HOVER
+        } else {
+            theme::SURFACE
+        };
+        ui.painter().rect_filled(rect, 5.0, bg);
+        if secondary {
+            ui.painter().rect_stroke(rect, 5.0, Stroke::new(1.5, theme::ACCENT), StrokeKind::Inside);
+        }
+        let fg = if primary { Color32::WHITE } else { theme::TEXT };
+        ui.painter().text(rect.center(), Align2::CENTER_CENTER, ch, theme::mono(17.0), fg);
+    }
+    resp
 }

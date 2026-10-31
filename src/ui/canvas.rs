@@ -1,22 +1,29 @@
 use egui::*;
 use crate::document::Document;
+use crate::theme;
 use crate::tools::*;
+use crate::ui::glyph_render;
 
 pub const ZOOM_MIN: f32 = 0.15;
 pub const ZOOM_MAX: f32 = 8.0;
+/// Cell size at 100 %: FiraCode's advance is half its line height, so glyphs fill the cell.
+pub const CELL_W: f32 = 10.0;
+pub const CELL_H: f32 = 20.0;
 /// Gap between the top-left of the view and the canvas at zero offset.
 const CANVAS_MARGIN: f32 = 20.0;
+/// Free space kept around the canvas when fitting it into the view.
+const FIT_PADDING: f32 = 32.0;
 
 pub struct CanvasState {
     pub zoom: f32,
     pub offset: Vec2,
     pub show_grid: bool,
-    pub cell_w: f32,
-    pub cell_h: f32,
     pub cursor_cell: Option<(usize, usize)>,
     pub march_phase: f32,
     /// Screen area of the canvas view in the last frame.
     pub view_rect: Rect,
+    /// Fit and centre the canvas on the next frame (new or opened document).
+    fit_pending: bool,
 }
 
 impl Default for CanvasState {
@@ -25,18 +32,17 @@ impl Default for CanvasState {
             zoom: 1.0,
             offset: Vec2::ZERO,
             show_grid: true,
-            cell_w: 10.0,
-            cell_h: 16.0,
             cursor_cell: None,
             march_phase: 0.0,
             view_rect: Rect::NOTHING,
+            fit_pending: true,
         }
     }
 }
 
 impl CanvasState {
     pub fn cell_size(&self) -> Vec2 {
-        Vec2::new(self.cell_w * self.zoom, self.cell_h * self.zoom)
+        Vec2::new(CELL_W * self.zoom, CELL_H * self.zoom)
     }
 
     pub fn screen_to_cell(&self, pos: Pos2, canvas_origin: Pos2) -> Option<(usize, usize)> {
@@ -70,17 +76,17 @@ impl CanvasState {
         Rect::from_min_size(min, cs)
     }
 
+    /// Where cell (x, y) was on screen in the last frame.
+    #[cfg(test)]
+    pub fn screen_cell_rect(&self, x: usize, y: usize) -> Rect {
+        self.cell_rect(x, y, canvas_origin(self.view_rect))
+    }
+
     pub fn zoom_around(&mut self, factor: f32, pivot: Pos2, canvas_origin: Pos2) {
         let old_zoom = self.zoom;
         self.zoom = (self.zoom * factor).clamp(ZOOM_MIN, ZOOM_MAX);
         let actual_factor = self.zoom / old_zoom;
         self.offset = pivot - canvas_origin - (pivot - canvas_origin - self.offset) * actual_factor;
-    }
-
-    /// Where cell (x, y) was on screen in the last frame.
-    #[cfg(test)]
-    pub fn screen_cell_rect(&self, x: usize, y: usize) -> Rect {
-        self.cell_rect(x, y, canvas_origin(self.view_rect))
     }
 
     /// Zooms around the middle of the view (menus and keyboard shortcuts).
@@ -90,6 +96,24 @@ impl CanvasState {
         } else {
             self.zoom = (self.zoom * factor).clamp(ZOOM_MIN, ZOOM_MAX);
         }
+    }
+
+    /// Zooms so the whole canvas is visible, centred (Ctrl+0).
+    pub fn request_fit(&mut self) {
+        self.fit_pending = true;
+    }
+
+    /// 100 %, keeping the middle of the view in place (Ctrl+1).
+    pub fn actual_size(&mut self) {
+        self.zoom_view_center(1.0 / self.zoom);
+    }
+
+    fn fit(&mut self, doc: &Document) {
+        let view = self.view_rect.shrink(FIT_PADDING);
+        let full = Vec2::new(doc.width as f32 * CELL_W, doc.height as f32 * CELL_H);
+        self.zoom = (view.width() / full.x).min(view.height() / full.y).clamp(ZOOM_MIN, ZOOM_MAX);
+        let size = full * self.zoom;
+        self.offset = self.view_rect.center() - size / 2.0 - canvas_origin(self.view_rect);
     }
 }
 
@@ -117,6 +141,10 @@ pub fn draw_canvas(
     let (resp, painter) = ui.allocate_painter(available.size(), Sense::drag());
     let origin = canvas_origin(available);
     state.view_rect = resp.rect;
+    if state.fit_pending && resp.rect.is_positive() {
+        state.fit(doc);
+        state.fit_pending = false;
+    }
 
     let hover_pos = ui.input(|i| i.pointer.hover_pos());
     // While a stroke is dragged outside the canvas, keep the cursor on its edge,
@@ -129,78 +157,81 @@ pub fn draw_canvas(
         None
     };
 
-    painter.rect_filled(resp.rect, 0.0, Color32::from_rgb(28, 28, 28));
-
     let cs = state.cell_size();
-
     let canvas_rect = Rect::from_min_size(
         origin + state.offset,
         Vec2::new(doc.width as f32 * cs.x, doc.height as f32 * cs.y),
     );
-    painter.rect_filled(canvas_rect, 0.0, Color32::BLACK);
+    let ppp = ui.ctx().pixels_per_point();
+    let snap = |rect: Rect| glyph_render::snap_rect(rect, ppp);
 
-    let font_id = FontId::monospace((state.cell_h * state.zoom * 0.85).max(6.0));
-    for y in 0..doc.height {
-        for x in 0..doc.width {
-            let cell_rect = state.cell_rect(x, y, origin);
-            if !resp.rect.intersects(cell_rect) { continue; }
-            let cell = doc.composite_cell(x, y);
-            if !cell.bg.is_transparent() {
-                painter.rect_filled(cell_rect, 0.0, cell.bg.to_egui());
-            }
-            if cell.ch != ' ' {
-                painter.text(
-                    cell_rect.center(),
-                    Align2::CENTER_CENTER,
-                    cell.ch.to_string(),
-                    font_id.clone(),
-                    cell.fg.to_egui(),
-                );
-            }
+    painter.add(Shadow { offset: [0, 8], blur: 28, spread: 2, color: Color32::from_black_alpha(170) }
+        .as_shape(canvas_rect, CornerRadius::ZERO));
+    painter.rect_filled(snap(canvas_rect), 0.0, theme::CANVAS_BG);
+
+    // Only the cells inside the view.
+    let first = |view_min: f32, base: f32, size: f32| ((view_min - base) / size).floor().max(0.0) as usize;
+    let last = |view_max: f32, base: f32, size: f32, count: usize| (((view_max - base) / size).ceil().max(0.0) as usize).min(count);
+    let (x0, x1) = (first(resp.rect.min.x, canvas_rect.min.x, cs.x), last(resp.rect.max.x, canvas_rect.min.x, cs.x, doc.width));
+    let (y0, y1) = (first(resp.rect.min.y, canvas_rect.min.y, cs.y), last(resp.rect.max.y, canvas_rect.min.y, cs.y, doc.height));
+
+    // The grid goes under the content, so it never cuts through glyphs.
+    if state.show_grid && cs.x >= 6.0 {
+        let pen = Stroke::new(1.0 / ppp, theme::GRID);
+        for x in x0..=x1 {
+            let sx = snap(state.cell_rect(x, 0, origin)).min.x;
+            painter.vline(sx, canvas_rect.y_range(), pen);
+        }
+        for y in y0..=y1 {
+            let sy = snap(state.cell_rect(0, y, origin)).min.y;
+            painter.hline(canvas_rect.x_range(), sy, pen);
         }
     }
 
-    if state.show_grid && state.zoom >= 0.4 {
-        let pen  = Stroke::new(0.5, Color32::from_gray(50));
-        let base = origin + state.offset;
-        for x in 0..=doc.width {
-            let sx = base.x + x as f32 * cs.x;
-            painter.line_segment(
-                [Pos2::new(sx, base.y), Pos2::new(sx, base.y + doc.height as f32 * cs.y)],
-                pen,
-            );
-        }
-        for y in 0..=doc.height {
-            let sy = base.y + y as f32 * cs.y;
-            painter.line_segment(
-                [Pos2::new(base.x, sy), Pos2::new(base.x + doc.width as f32 * cs.x, sy)],
-                pen,
-            );
+    let font_id = theme::mono(CELL_H * state.zoom);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let cell = doc.composite_cell(x, y);
+            if cell.is_empty() { continue; }
+            let rect = snap(state.cell_rect(x, y, origin));
+            draw_cell(&painter, rect, cell.ch, cell.fg.to_egui(), cell.bg.to_egui(), &font_id);
         }
     }
 
     if let Some((cx, cy)) = state.cursor_cell {
         let preview = get_preview(active_tool, tools, doc, cx, cy, ctx_tool);
         for (px, py, cell) in &preview {
-            let cell_rect = state.cell_rect(*px, *py, origin);
-            if !cell.bg.is_transparent() {
-                painter.rect_filled(
-                    cell_rect, 0.0,
-                    Color32::from_rgba_unmultiplied(cell.bg.r, cell.bg.g, cell.bg.b, 128),
-                );
-            }
-            if cell.ch != ' ' {
-                painter.text(
-                    cell_rect.center(), Align2::CENTER_CENTER,
-                    cell.ch.to_string(), font_id.clone(),
-                    Color32::from_rgba_unmultiplied(cell.fg.r, cell.fg.g, cell.fg.b, 180),
-                );
-            }
+            let rect = snap(state.cell_rect(*px, *py, origin));
+            let bg = Color32::from_rgba_unmultiplied(cell.bg.r, cell.bg.g, cell.bg.b, cell.bg.a / 2);
+            let fg = Color32::from_rgba_unmultiplied(cell.fg.r, cell.fg.g, cell.fg.b, 180);
+            draw_cell(&painter, rect, cell.ch, fg, bg, &font_id);
         }
     }
 
     draw_moving_selection(tools, doc, state, &painter, origin, &font_id);
+
+    // Hovered cell.
+    if let Some((cx, cy)) = state.cursor_cell
+        && cx < doc.width && cy < doc.height && !resp.dragged()
+    {
+        let rect = snap(state.cell_rect(cx, cy, origin));
+        painter.rect_stroke(rect, 0.0, Stroke::new(1.0, theme::ACCENT), StrokeKind::Inside);
+    }
+
     draw_selection(tools, state, &painter, origin, state.march_phase);
+    painter.rect_stroke(snap(canvas_rect), 0.0, Stroke::new(1.0, theme::BORDER_STRONG), StrokeKind::Outside);
+
+    if resp.contains_pointer() {
+        let moving = active_tool == ToolType::Select
+            && state.cursor_cell.is_some_and(|(x, y)| tools.selection.hit(x, y));
+        ui.ctx().set_cursor_icon(if resp.dragged_by(PointerButton::Middle) {
+            CursorIcon::Grabbing
+        } else if moving {
+            CursorIcon::Move
+        } else {
+            CursorIcon::Crosshair
+        });
+    }
 
     let mut events = Vec::new();
 
@@ -257,6 +288,16 @@ pub fn draw_canvas(
     events
 }
 
+/// One cell: background, then the glyph (procedurally for box / block / braille characters).
+fn draw_cell(painter: &Painter, rect: Rect, ch: char, fg: Color32, bg: Color32, font_id: &FontId) {
+    if bg.a() > 0 {
+        painter.rect_filled(rect, 0.0, bg);
+    }
+    if ch != ' ' && !glyph_render::draw(painter, ch, rect, fg) {
+        painter.text(rect.center(), Align2::CENTER_CENTER, ch, font_id.clone(), fg);
+    }
+}
+
 fn get_preview(
     tool: ToolType,
     tools: &crate::app::ToolState,
@@ -288,12 +329,9 @@ fn draw_moving_selection(
         for (dx, cell) in row.iter().enumerate() {
             let (x, y) = (x0 + dx, y0 + dy);
             if x >= doc.width || y >= doc.height { continue; }
-            let rect = state.cell_rect(x, y, origin);
-            let bg = if cell.bg.is_transparent() { Color32::BLACK } else { cell.bg.to_egui() };
-            painter.rect_filled(rect, 0.0, bg);
-            if cell.ch != ' ' {
-                painter.text(rect.center(), Align2::CENTER_CENTER, cell.ch.to_string(), font_id.clone(), cell.fg.to_egui());
-            }
+            let rect = glyph_render::snap_rect(state.cell_rect(x, y, origin), painter.pixels_per_point());
+            painter.rect_filled(rect, 0.0, theme::CANVAS_BG);
+            draw_cell(painter, rect, cell.ch, cell.fg.to_egui(), cell.bg.to_egui(), font_id);
         }
     }
 }

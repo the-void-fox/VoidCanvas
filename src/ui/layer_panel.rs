@@ -1,4 +1,7 @@
 use egui::*;
+use crate::icons;
+use crate::theme;
+use crate::ui::widgets::icon_button;
 use crate::document::Document;
 
 #[derive(Debug)]
@@ -41,21 +44,28 @@ impl LayerPanel {
         let mut action = None;
 
         let (n, active) = (doc.layers.len(), doc.active_layer);
-        ui.horizontal_wrapped(|ui| {
-            let mut button = |ui: &mut Ui, enabled: bool, icon: &str, hint: &str, act: LayerAction| {
-                if ui.add_enabled(enabled, Button::new(icon)).on_hover_text(hint).clicked() {
-                    action = Some(act);
-                }
-            };
-            button(ui, true,             "➕",        "Add layer",       LayerAction::Add);
-            button(ui, n > 1,            "➖",        "Remove layer",    LayerAction::Remove);
-            button(ui, true,             "\u{f0191}", "Duplicate",       LayerAction::Duplicate);
-            button(ui, active > 0,       "⬇M",       "Merge down",      LayerAction::MergeDown);
-            button(ui, active + 1 < n,   "↑",        "Move layer up",   LayerAction::MoveUp);
-            button(ui, active > 0,       "↓",        "Move layer down", LayerAction::MoveDown);
-        });
-
-        ui.separator();
+        egui::Panel::bottom("layer_tools")
+            .frame(Frame::NONE.inner_margin(Margin::symmetric(0, 6)))
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    let mut button = |ui: &mut Ui, enabled: bool, icon: &str, hint: &str, act: LayerAction| {
+                        let clicked = ui.add_enabled_ui(enabled, |ui| icon_button(ui, icon, 28.0, false, hint)).inner.clicked();
+                        if clicked {
+                            action = Some(act);
+                        }
+                    };
+                    button(ui, true,           icons::PLUS,       "New layer",       LayerAction::Add);
+                    button(ui, true,           icons::DUPLICATE,  "Duplicate layer", LayerAction::Duplicate);
+                    button(ui, active > 0,     icons::MERGE_DOWN, "Merge down",      LayerAction::MergeDown);
+                    button(ui, active + 1 < n, icons::ARROW_UP,   "Move layer up",   LayerAction::MoveUp);
+                    button(ui, active > 0,     icons::ARROW_DOWN, "Move layer down", LayerAction::MoveDown);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        button(ui, n > 1, icons::DELETE, "Delete layer", LayerAction::Remove);
+                    });
+                });
+            });
 
         self.drag_target = None;
 
@@ -76,50 +86,47 @@ impl LayerPanel {
                             );
                             if extended.contains(ptr) {
                                 self.drag_target = Some(layer_idx + 1);
-                                ui.painter().rect_filled(insert_rect, 2.0, Color32::from_rgb(0, 150, 255));
+                                ui.painter().rect_filled(insert_rect, 2.0, theme::ACCENT);
                             } else {
                                 ui.painter().rect_filled(insert_rect, 2.0, Color32::TRANSPARENT);
                             }
                         }
                     }
 
-                    let bg = if is_active {
-                        Color32::from_rgb(0, 90, 180)
-                    } else if self.drag_from == Some(layer_idx) {
-                        Color32::from_gray(35)
-                    } else {
-                        Color32::from_gray(52)
-                    };
-
                     let (row_rect, row_resp) = ui.allocate_exact_size(
-                        Vec2::new(ui.available_width(), 30.0),
+                        Vec2::new(ui.available_width(), 32.0),
                         Sense::click_and_drag(),
                     );
 
-                    ui.painter().rect_filled(row_rect, 4.0, bg);
+                    let bg = if is_active {
+                        theme::ACCENT_SOFT
+                    } else if row_resp.hovered() || self.drag_from == Some(layer_idx) {
+                        theme::SURFACE
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    ui.painter().rect_filled(row_rect, 6.0, bg);
+                    if is_active {
+                        let bar = Rect::from_min_size(row_rect.min + vec2(0.0, 6.0), vec2(3.0, row_rect.height() - 12.0));
+                        ui.painter().rect_filled(bar, 1.5, theme::ACCENT);
+                    }
 
                     let mut child_ui = ui.new_child(
                         UiBuilder::new().max_rect(row_rect).layout(Layout::left_to_right(Align::Center)),
                     );
                     child_ui.add_space(6.0);
+                    child_ui.spacing_mut().item_spacing.x = 2.0;
 
-                    let vis_text = if layer.visible { "󰈈" } else { "󰈉" };
-                    if child_ui.small_button(vis_text)
-                        .on_hover_text(if layer.visible { "Hide layer" } else { "Show layer" })
-                        .clicked()
-                    {
+                    let (eye, eye_hint) = if layer.visible { (icons::EYE, "Hide layer") } else { (icons::EYE_OFF, "Show layer") };
+                    if icon_button(&mut child_ui, eye, 24.0, false, eye_hint).clicked() {
                         action = Some(LayerAction::ToggleVisible(layer_idx));
                     }
-
-                    let lck_text = if layer.locked { "🔒" } else { "🔓" };
-                    if child_ui.small_button(lck_text)
-                        .on_hover_text(if layer.locked { "Unlock layer" } else { "Lock layer" })
-                        .clicked()
-                    {
+                    let (lock, lock_hint) = if layer.locked { (icons::LOCK, "Unlock layer") } else { (icons::LOCK_OPEN, "Lock layer") };
+                    if icon_button(&mut child_ui, lock, 24.0, false, lock_hint).clicked() {
                         action = Some(LayerAction::ToggleLock(layer_idx));
                     }
 
-                    child_ui.add_space(4.0);
+                    child_ui.add_space(6.0);
 
                     if self.rename_idx == Some(layer_idx) {
                         let r = child_ui.text_edit_singleline(&mut self.rename_buf);
@@ -134,22 +141,22 @@ impl LayerPanel {
                             self.rename_idx = None;
                         }
                     } else {
-                        let name_color = if is_active {
-                            Color32::WHITE
-                        } else if !layer.visible {
-                            Color32::GRAY
+                        let name_color = if !layer.visible {
+                            theme::TEXT_FAINT
+                        } else if is_active {
+                            theme::TEXT
                         } else {
-                            Color32::from_gray(210)
+                            theme::TEXT_DIM
                         };
-                        let text = RichText::new(&layer.name)
-                            .color(name_color)
-                            .strong_if(is_active);
-                        child_ui.label(text);
+                        child_ui.add(Label::new(RichText::new(&layer.name).color(name_color)).selectable(false).truncate());
                     }
 
-                    child_ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(RichText::new("⠿").color(Color32::from_gray(100)));
-                    });
+                    if row_resp.hovered() {
+                        child_ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.add_space(6.0);
+                            ui.label(RichText::new(icons::DRAG).font(theme::mono(14.0)).color(theme::TEXT_FAINT));
+                        });
+                    }
 
                     if row_resp.drag_started() {
                         self.drag_from = Some(layer_idx);
@@ -177,7 +184,7 @@ impl LayerPanel {
                         );
                         if extended.contains(ptr) {
                             self.drag_target = Some(0);
-                            ui.painter().rect_filled(bottom_rect, 2.0, Color32::from_rgb(0, 150, 255));
+                            ui.painter().rect_filled(bottom_rect, 2.0, theme::ACCENT);
                         } else {
                             ui.painter().rect_filled(bottom_rect, 2.0, Color32::TRANSPARENT);
                         }
@@ -202,15 +209,5 @@ impl LayerPanel {
         }
 
         action
-    }
-}
-
-trait RichTextExt {
-    fn strong_if(self, condition: bool) -> Self;
-}
-
-impl RichTextExt for RichText {
-    fn strong_if(self, condition: bool) -> Self {
-        if condition { self.strong() } else { self }
     }
 }
