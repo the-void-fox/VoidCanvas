@@ -34,6 +34,25 @@ impl AsciiArtEditor {
                         if ui.add(Button::new("Open…").shortcut_text("Ctrl+O")).clicked() {
                             self.request(PendingAction::Open, &ctx);
                         }
+                        ui.menu_button("Open Recent", |ui| {
+                            if self.settings.recent_files.is_empty() {
+                                ui.label(RichText::new("No recent files").color(theme::TEXT_FAINT));
+                            }
+                            for path in self.settings.recent_files.clone() {
+                                let name = std::path::Path::new(&path)
+                                    .file_name()
+                                    .map_or_else(|| path.clone(), |n| n.to_string_lossy().to_string());
+                                if ui.button(name).on_hover_text(&path).clicked() {
+                                    self.request(PendingAction::OpenPath(path.into()), &ctx);
+                                }
+                            }
+                            if !self.settings.recent_files.is_empty() {
+                                ui.separator();
+                                if ui.button("Clear Recent").clicked() {
+                                    self.settings.clear_recent();
+                                }
+                            }
+                        });
                         if ui.add(Button::new("Save").shortcut_text("Ctrl+S")).clicked() { self.save(); }
                         if ui.add(Button::new("Save As…").shortcut_text("Ctrl+Shift+S")).clicked() { self.save_as(); }
                         ui.separator();

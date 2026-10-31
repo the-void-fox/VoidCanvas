@@ -16,6 +16,7 @@ use crate::tools::{
 mod chrome;
 mod dialogs;
 mod file_io;
+pub(crate) mod storage;
 
 use crate::ui::{
     canvas::{CanvasEvent, CanvasState, draw_canvas, shape_mods},
@@ -29,6 +30,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Undo groups of arrow-key moves live apart from typing sessions' groups.
 const NUDGE_GROUPS: u64 = 1 << 63;
 
+#[derive(Default)]
 pub struct ToolState {
     pub brush:     BrushTool,
     pub eraser:    EraserTool,
@@ -38,18 +40,6 @@ pub struct ToolState {
     pub text:      TextTool,
 }
 
-impl Default for ToolState {
-    fn default() -> Self {
-        Self {
-            brush:     BrushTool::default(),
-            eraser:    EraserTool::default(),
-            fill:      FillTool::default(),
-            shape:     ShapeTool::default(),
-            selection: SelectionTool::default(),
-            text:      TextTool::default(),
-        }
-    }
-}
 
 /// Which panel the top of the dock shows.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -60,12 +50,16 @@ pub enum DockTab {
 }
 
 /// An action that would throw away unsaved work; it waits for the user's answer.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum PendingAction {
     New,
     Open,
+    OpenPath(std::path::PathBuf),
     Quit,
 }
+
+/// Seconds after an edit before unsaved work is written to the recovery file.
+const AUTOSAVE_DELAY: f64 = 30.0;
 
 pub struct AsciiArtEditor {
     pub doc:          Document,
@@ -103,6 +97,12 @@ pub struct AsciiArtEditor {
     /// Set once the user agreed to quit, so the next close request goes through.
     allow_close: bool,
     window_title: String,
+    settings: storage::Settings,
+    /// Unsaved work from a run that crashed, waiting for "Recover?".
+    pub(crate) recovery: Option<storage::Autosave>,
+    /// History version written by the last autosave.
+    autosaved_version: u64,
+    last_autosave: f64,
 }
 
 impl Default for AsciiArtEditor {
@@ -138,6 +138,10 @@ impl Default for AsciiArtEditor {
             pending_action: None,
             allow_close:    false,
             window_title:   String::new(),
+            settings:       storage::Settings::default(),
+            recovery:       None,
+            autosaved_version: 0,
+            last_autosave:  0.0,
         }
     }
 }
@@ -148,7 +152,11 @@ impl AsciiArtEditor {
         theme::install(&cc.egui_ctx);
         // Ctrl +/-/0 zoom the canvas, not the whole UI.
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-        Self::default()
+        Self {
+            settings: storage::Settings::load(),
+            recovery: storage::Autosave::load(),
+            ..Self::default()
+        }
     }
 
     fn draw_context(&self, is_primary: bool) -> DrawContext {
@@ -352,7 +360,7 @@ impl AsciiArtEditor {
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
         // Keys typed into a text field (char search, layer rename, …) belong to that field.
-        if ctx.text_edit_focused() || self.pending_action.is_some() { return; }
+        if ctx.text_edit_focused() || self.pending_action.is_some() || self.recovery.is_some() { return; }
 
         let typing = self.typing();
         if typing {
@@ -643,6 +651,41 @@ impl AsciiArtEditor {
         self.history.clear();
         self.tools.selection.clear();
         self.canvas_state.request_fit();
+        // The previous document's unsaved work was given up on purpose.
+        storage::Autosave::remove();
+        self.autosaved_version = self.history.version();
+    }
+
+    /// Writes unsaved work to the recovery file a little while after it changed.
+    fn autosave(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        if !self.doc.modified || self.history.version() == self.autosaved_version {
+            self.last_autosave = now;
+            return;
+        }
+        let due = self.last_autosave + AUTOSAVE_DELAY;
+        if now >= due && !self.drawing {
+            storage::Autosave::write(&self.doc);
+            self.autosaved_version = self.history.version();
+            self.last_autosave = now;
+        } else {
+            ctx.request_repaint_after_secs((due - now).max(0.1) as f32);
+        }
+    }
+
+    /// Files dropped on the window open like File → Open.
+    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone()));
+        if let Some(path) = dropped {
+            self.request(PendingAction::OpenPath(path), ctx);
+        }
+        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+            let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("drop_overlay")));
+            let screen = ctx.content_rect();
+            painter.rect_filled(screen, 0.0, Color32::from_black_alpha(190));
+            painter.rect_stroke(screen.shrink(16.0), 12.0, Stroke::new(2.0, theme::ACCENT), StrokeKind::Inside);
+            painter.text(screen.center(), Align2::CENTER_CENTER, "Drop a .vc or .txt file to open", theme::semibold(20.0), theme::TEXT);
+        }
     }
 
     fn show_status(&mut self, msg: impl Into<String>) {
@@ -669,6 +712,7 @@ impl AsciiArtEditor {
                 self.show_new_dialog = true;
             }
             PendingAction::Open => self.open(),
+            PendingAction::OpenPath(path) => self.open_path(&path),
             PendingAction::Quit => {
                 self.allow_close = true;
                 ctx.send_viewport_cmd(ViewportCommand::Close);
@@ -678,9 +722,13 @@ impl AsciiArtEditor {
 
     /// Intercepts closing the window while there are unsaved changes.
     fn handle_close_request(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close && self.doc.modified {
+        if !ctx.input(|i| i.viewport().close_requested()) { return; }
+        if !self.allow_close && self.doc.modified {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
             self.pending_action = Some(PendingAction::Quit);
+        } else {
+            // A clean exit: nothing to recover next time.
+            storage::Autosave::remove();
         }
     }
 
@@ -720,11 +768,14 @@ impl eframe::App for AsciiArtEditor {
         }
 
         self.handle_close_request(&ctx);
+        self.handle_dropped_files(&ctx);
+        self.autosave(&ctx);
         self.handle_keyboard(&ctx);
         self.new_doc_dialog(&ctx);
         self.resize_dialog(&ctx);
         self.about_dialog(&ctx);
         self.unsaved_changes_modal(&ctx);
+        self.recovery_modal(&ctx);
 
         if self.active_tool != ToolType::Text {
             self.tools.text.stop();

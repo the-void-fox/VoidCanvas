@@ -16,6 +16,8 @@ pub struct History {
     redo_stack: Vec<Entry>,
     /// Group of the newest command, if it may still absorb more changes.
     open_group: Option<u64>,
+    /// Bumped by every change of the document through the history.
+    version: u64,
 }
 
 impl History {
@@ -25,7 +27,13 @@ impl History {
             undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             open_group: None,
+            version: 0,
         }
+    }
+
+    /// Changes whenever the document is edited, undone or redone.
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// Records a command whose effect is already applied to the document.
@@ -43,6 +51,7 @@ impl History {
         }
         self.redo_stack.clear();
         self.open_group = None;
+        self.version += 1;
     }
 
     /// Records drawn changes; consecutive pushes with the same `group`
@@ -54,6 +63,7 @@ impl History {
         {
             merge_changes(top, changes);
             self.redo_stack.clear();
+            self.version += 1;
             return;
         }
         self.push_as(Command::Draw { layer_idx, changes }, label);
@@ -73,6 +83,7 @@ impl History {
 
     pub fn undo(&mut self, doc: &mut Document) -> bool {
         self.open_group = None;
+        self.version += 1;
         if let Some(entry) = self.undo_stack.pop_back() {
             apply_inverse(&entry.cmd, doc);
             self.redo_stack.push(entry);
@@ -84,6 +95,7 @@ impl History {
 
     pub fn redo(&mut self, doc: &mut Document) -> bool {
         self.open_group = None;
+        self.version += 1;
         if let Some(entry) = self.redo_stack.pop() {
             apply_command(&entry.cmd, doc);
             self.undo_stack.push_back(entry);
@@ -114,6 +126,7 @@ impl History {
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.open_group = None;
+        self.version += 1;
     }
 }
 

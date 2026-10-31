@@ -10,14 +10,16 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 
 | Category | Details |
 |---|---|
-| **Tools** | Brush, Eraser, Flood Fill, Rectangle, Ellipse, Line, Border Box, Selection — left button draws with the primary slot, right button with the secondary |
+| **Tools** | Select, Brush, Eraser, Flood Fill, Eyedropper, Text, Line, Rectangle, Ellipse, Border Box — left button uses the primary slot, right button the secondary; Shift / Alt square or centre shapes |
+| **Paint channels** | Glyph / Fore / Back toggles: paint, fill, erase or pick only the character, only the colour, or only the background |
+| **Selection** | Move by dragging or with the arrow keys, glyph-aware Flip / Rotate (`/` ↔ `\`, `┌` ↔ `┐`, `▌` ↔ `▐`, …) |
 | **Layers** | Add / Remove / Duplicate / Merge Down / Reorder / Rename / Lock / Hide |
-| **History** | 100-step Undo / Redo for drawing, layer operations and canvas resize |
+| **History** | 100-step Undo / Redo for everything, with a History panel to jump to any step |
 | **Glyphs** | 18 palettes (Lines, Blocks, Math, Greek, Arrows, Nerd icons, …); search by name, code point (`U+2588`) or any typed character |
 | **Colors** | Primary & secondary glyph / background slots, live RGBA picker, hex input, 24-colour palette |
 | **Canvas** | Terminal-style 1:2 cells; box-drawing, block and braille characters are drawn as shapes so they join seamlessly at any zoom; fit / 100 % zoom, optional grid |
 | **Clipboard** | Copy / cut / paste selections, also as plain text to and from other programs |
-| **Export** | Native `.vc` format (JSON), plain text `.txt`, and rendered **PNG** (opaque or transparent) |
+| **Files** | Native `.vc` format (JSON), `.txt` import / export, **PNG** export (opaque or transparent), recent files, drag & drop, autosave with crash recovery |
 
 ---
 
@@ -51,6 +53,7 @@ cargo build --release
 | `Ctrl+O` | Open `.vc` file |
 | `Ctrl+S` | Save |
 | `Ctrl+Shift+S` | Save as… |
+| Drop a file on the window | Open `.vc` / import `.txt` |
 
 ### Edit
 
@@ -61,30 +64,36 @@ cargo build --release
 | `Ctrl+C` | Copy selection (also as plain text to the system clipboard) |
 | `Ctrl+X` | Cut selection |
 | `Ctrl+V` | Paste at cursor (text copied from other apps works too) |
+| `Ctrl+A` / `Ctrl+D` | Select all / deselect |
 | `Delete` | Delete selection |
 | `Escape` | Deselect |
+| `H` / `V` | Flip selection horizontally / vertically |
+| Arrows (`Shift`: ×5) | Move the selected block |
 | `X` | Swap primary ↔ secondary |
 
 ### Tools
 
 | Key | Tool |
 |---|---|
+| `S` | Select |
 | `B` | Brush |
 | `E` | Eraser |
 | `F` | Flood Fill |
+| `I` | Eyedropper (or `Alt`+click with any drawing tool) |
+| `T` | Text (click, type; `Enter` next line, `Esc` done) |
 | `R` | Rectangle |
 | `O` | Ellipse |
 | `L` | Line |
 | `D` | Border Box |
-| `S` | Select |
-| `+` / `-` | Brush size up / down |
+| `[` `]` or `-` `+` | Brush size down / up |
+| `Shift` / `Alt` while dragging a shape | Square / straight, from the centre |
 | Right button | Draw with the secondary glyph and colours |
 
 ### Canvas
 
 | Input | Action |
 |---|---|
-| Scroll | Pan |
+| Scroll, `Space` + drag | Pan |
 | `Ctrl` + Scroll | Zoom |
 | `Ctrl` + `+` / `-` | Zoom in / out |
 | `Ctrl+0` | Fit to window |

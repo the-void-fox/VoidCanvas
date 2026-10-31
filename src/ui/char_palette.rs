@@ -82,15 +82,10 @@ fn parse_code_point(query: &str) -> Option<char> {
     u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
 }
 
+#[derive(Default)]
 pub struct CharPalette {
     pub category: usize,
     pub search: String,
-}
-
-impl Default for CharPalette {
-    fn default() -> Self {
-        Self { category: 0, search: String::new() }
-    }
 }
 
 impl CharPalette {

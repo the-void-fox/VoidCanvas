@@ -417,6 +417,60 @@ mod ui {
     }
 
     #[test]
+    fn dropping_a_text_file_imports_it() {
+        let path = std::env::temp_dir().join(format!("void-canvas-test-{}.txt", std::process::id()));
+        std::fs::write(&path, "/\\_/\\\n( o.o )\n > ^ <").unwrap();
+
+        let mut harness = harness();
+        harness.input_mut().dropped_files.push(egui::DroppedFile { path: Some(path.clone()), ..Default::default() });
+        harness.step();
+        harness.step();
+        std::fs::remove_file(&path).unwrap();
+
+        let doc = &harness.state().doc;
+        assert_eq!((doc.width, doc.height), (7, 3));
+        assert_eq!(doc.to_text(), "/\\_/\\\n( o.o )\n > ^ <");
+        assert!(doc.modified && doc.file_path.is_none(), "an import is a new, unsaved document");
+    }
+
+    #[test]
+    fn recovering_an_autosave_restores_the_document() {
+        let mut doc = crate::document::Document::new(5, 2);
+        doc.layers[0].set(1, 1, crate::document::Cell::new('R', crate::document::Color::WHITE, crate::document::Color::TRANSPARENT));
+        let mut harness = harness();
+        harness.state_mut().recovery = Some(crate::app::storage::Autosave {
+            file_path: Some("/art/lost.vc".into()),
+            document: doc,
+            age: None,
+        });
+        // The modal measures itself in its first frame.
+        harness.step();
+        harness.step();
+        harness.get_by_label("Recover").click();
+        harness.step();
+        harness.step();
+
+        let app = harness.state();
+        assert!(app.recovery.is_none());
+        assert_eq!((app.doc.width, app.doc.height), (5, 2));
+        assert_eq!(glyph_at(&harness, 1, 1), 'R');
+        assert!(app.doc.modified, "recovered work is still unsaved");
+        assert_eq!(app.doc.file_path.as_deref(), Some("/art/lost.vc"));
+    }
+
+    #[test]
+    fn recent_files_are_unique_newest_first_and_capped() {
+        let mut settings = crate::app::storage::Settings::default();
+        for i in 0..12 {
+            settings.add_recent(&format!("/art/{i}.vc"));
+        }
+        settings.add_recent("/art/5.vc");
+        assert_eq!(settings.recent_files.len(), 10);
+        assert_eq!(settings.recent_files[0], "/art/5.vc");
+        assert_eq!(settings.recent_files.iter().filter(|p| *p == "/art/5.vc").count(), 1);
+    }
+
+    #[test]
     fn dialogs_and_dock_tabs_render() {
         let mut harness = harness();
         harness.state_mut().show_about_dialog = true;

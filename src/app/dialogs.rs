@@ -124,19 +124,24 @@ impl AsciiArtEditor {
                                 ("Ctrl+Z", "Undo"),
                                 ("Ctrl+Y, Ctrl+Shift+Z", "Redo"),
                                 ("Ctrl+C / X / V", "Copy / cut / paste"),
+                                ("Ctrl+A  /  Ctrl+D", "Select all / deselect"),
                                 ("Delete", "Delete selection"),
-                                ("Escape", "Deselect"),
+                                ("H  /  V", "Flip selection"),
+                                ("Arrows (+Shift)", "Move selection 1 (5)"),
                                 ("X", "Swap primary / secondary"),
                             ]),
                             ("Tools", &[
-                                ("B  E  F", "Brush, eraser, fill"),
-                                ("L  R  O  D", "Line, rect, ellipse, border"),
                                 ("S", "Select"),
-                                ("+  /  –", "Brush size"),
-                                ("Right button", "Draw with the secondary slot"),
+                                ("B  E  F  I", "Brush, eraser, fill, eyedropper"),
+                                ("T", "Text"),
+                                ("L  R  O  D", "Line, rect, ellipse, border"),
+                                ("[  ]  or  –  +", "Brush size"),
+                                ("Right button", "Use the secondary slot"),
+                                ("Alt+click", "Pick glyph and colours"),
+                                ("Shift  /  Alt", "Square shape / from centre"),
                             ]),
                             ("Canvas", &[
-                                ("Scroll, middle drag", "Pan"),
+                                ("Scroll, Space+drag", "Pan"),
                                 ("Ctrl+Scroll, Ctrl ±", "Zoom"),
                                 ("Ctrl+0", "Fit to window"),
                                 ("Ctrl+1", "Actual size"),
@@ -234,10 +239,10 @@ impl AsciiArtEditor {
     pub(super) fn unsaved_changes_modal(&mut self, ctx: &egui::Context) {
         enum Choice { Save, Discard, Cancel }
 
-        let Some(action) = self.pending_action else { return };
+        let Some(action) = self.pending_action.clone() else { return };
         let what = match action {
             PendingAction::New  => "creating a new document",
-            PendingAction::Open => "opening another file",
+            PendingAction::Open | PendingAction::OpenPath(_) => "opening another file",
             PendingAction::Quit => "quitting",
         };
         let name = self.doc_name();
@@ -269,6 +274,53 @@ impl AsciiArtEditor {
                 self.perform(action, ctx);
             }
             Some(Choice::Cancel) => self.pending_action = None,
+            None => {}
+        }
+    }
+
+    /// After a crash: offers back the unsaved work found in the autosave.
+    pub(super) fn recovery_modal(&mut self, ctx: &egui::Context) {
+        let Some(autosave) = &self.recovery else { return };
+        let name = autosave
+            .file_path
+            .as_deref()
+            .and_then(|p| std::path::Path::new(p).file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Untitled".to_owned());
+        let when = match autosave.age.map(|age| age.as_secs() / 60) {
+            Some(0) => "less than a minute ago".to_owned(),
+            Some(1) => "a minute ago".to_owned(),
+            Some(m) if m < 120 => format!("{m} minutes ago"),
+            Some(m) => format!("{} hours ago", m / 60),
+            None => "earlier".to_owned(),
+        };
+
+        let mut recover = None;
+        Modal::new(Id::new("recover_autosave")).show(ctx, |ui| {
+            ui.set_width(360.0);
+            ui.heading("Recover unsaved work?");
+            ui.add_space(6.0);
+            ui.label(format!("Void Canvas didn't close properly. Unsaved changes to \"{name}\" were kept {when}."));
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button("Recover").clicked() { recover = Some(true); }
+                if ui.button("Discard").clicked() { recover = Some(false); }
+            });
+        });
+
+        match recover {
+            Some(true) => {
+                let autosave = self.recovery.take().unwrap();
+                let mut doc = autosave.document;
+                doc.file_path = autosave.file_path;
+                self.load_document(doc);
+                self.doc.modified = true;
+                self.show_status("Recovered unsaved work");
+            }
+            Some(false) => {
+                self.recovery = None;
+                super::storage::Autosave::remove();
+            }
             None => {}
         }
     }

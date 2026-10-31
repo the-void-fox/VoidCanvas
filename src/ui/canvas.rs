@@ -134,6 +134,7 @@ pub fn shape_mods(mods: Modifiers) -> ShapeMods {
     ShapeMods { constrain: mods.shift, from_center: mods.alt }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw_canvas(
     ui: &mut egui::Ui,
     doc: &Document,

@@ -61,11 +61,11 @@ impl SelectionTool {
                 if new_rect != sel {
                     self.move_started = true;
                     let mut changes = Changes::new();
-                    if !self.source_cleared {
-                        if let Some(src) = self.source_rect {
-                            changes.extend(clear_rect(doc, src));
-                            self.source_cleared = true;
-                        }
+                    if !self.source_cleared
+                        && let Some(src) = self.source_rect
+                    {
+                        changes.extend(clear_rect(doc, src));
+                        self.source_cleared = true;
                     }
                     self.selection = Some(new_rect);
                     return changes;

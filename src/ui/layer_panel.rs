@@ -19,24 +19,13 @@ pub enum LayerAction {
     Reorder(usize, usize),
 }
 
+#[derive(Default)]
 pub struct LayerPanel {
     pub rename_idx:  Option<usize>,
     pub rename_buf:  String,
     rename_focus:    bool,
     drag_from:       Option<usize>,
     drag_target:     Option<usize>,
-}
-
-impl Default for LayerPanel {
-    fn default() -> Self {
-        Self {
-            rename_idx:   None,
-            rename_buf:   String::new(),
-            rename_focus: false,
-            drag_from:    None,
-            drag_target:  None,
-        }
-    }
 }
 
 impl LayerPanel {

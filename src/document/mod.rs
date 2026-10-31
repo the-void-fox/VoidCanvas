@@ -1,5 +1,6 @@
 pub mod cell;
 pub mod layer;
+#[allow(clippy::module_inception)]
 pub mod document;
 
 use std::collections::HashMap;

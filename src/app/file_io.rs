@@ -1,7 +1,8 @@
 //! Saving, opening and exporting files.
 
-use super::AsciiArtEditor;
-use crate::document::Document;
+use super::{AsciiArtEditor, storage};
+use crate::document::{Color, Document};
+use crate::tools::selection::text_to_content;
 
 impl AsciiArtEditor {
     pub(super) fn export_text(&mut self) {
@@ -10,7 +11,7 @@ impl AsciiArtEditor {
             .save_file()
         {
             let mut path = path;
-            if path.extension().map_or(true, |ext| ext != "txt") {
+            if path.extension().is_none_or(|ext| ext != "txt") {
                 path.set_extension("txt");
             }
             let text = self.doc.to_text();
@@ -75,17 +76,17 @@ impl AsciiArtEditor {
                 return false;
             }
         };
-        let tmp = format!("{path}.tmp");
-        let result = std::fs::write(&tmp, data).and_then(|_| std::fs::rename(&tmp, &path));
-        match result {
+        match storage::write_atomically(std::path::Path::new(&path), &data) {
             Ok(()) => {
+                self.settings.add_recent(&path);
                 self.doc.file_path = Some(path);
                 self.doc.modified = false;
+                storage::Autosave::remove();
+                self.autosaved_version = self.history.version();
                 self.show_status(format!("Saved: {}", self.doc_name()));
                 true
             }
             Err(e) => {
-                let _ = std::fs::remove_file(&tmp);
                 self.show_status(format!("Save failed: {e}"));
                 false
             }
@@ -94,22 +95,31 @@ impl AsciiArtEditor {
 
     pub(super) fn open(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Void Canvas or text", &["vc", "txt"])
             .add_filter("Void Canvas", &["vc"])
+            .add_filter("Text", &["txt"])
             .pick_file()
         {
             self.open_path(&path);
         }
     }
 
-    /// Loads a `.vc` file, replacing the current document (reports problems in the status bar).
+    /// Loads a `.vc` file (or imports a `.txt` one), replacing the current document.
+    /// Problems are reported in the status bar.
     pub fn open_path(&mut self, path: &std::path::Path) {
+        let shown = path.to_string_lossy().to_string();
         let data = match std::fs::read_to_string(path) {
             Ok(data) => data,
             Err(e) => {
+                self.settings.forget_recent(&shown);
                 self.show_status(format!("Failed to read file: {e}"));
                 return;
             }
         };
+        if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("txt")) {
+            self.import_text(path, &data);
+            return;
+        }
         let mut doc = match serde_json::from_str::<Document>(&data) {
             Ok(doc) => doc,
             Err(e) => {
@@ -121,8 +131,29 @@ impl AsciiArtEditor {
             self.show_status(format!("Can't open file: {e}"));
             return;
         }
-        doc.file_path = Some(path.to_string_lossy().to_string());
+        doc.file_path = Some(shown.clone());
         self.load_document(doc);
+        self.settings.add_recent(&shown);
         self.show_status(format!("Opened: {}", self.doc_name()));
+    }
+
+    /// A text file becomes a new document just big enough for it.
+    fn import_text(&mut self, path: &std::path::Path, text: &str) {
+        const MAX: usize = 500;
+        let block = text_to_content(text, &Color::WHITE, &Color::TRANSPARENT);
+        let width = block.first().map_or(0, |row| row.len()).clamp(1, MAX);
+        let height = block.len().clamp(1, MAX);
+        let mut doc = Document::new(width, height);
+        doc.layers[0].name = "Imported".into();
+        for (y, row) in block.iter().take(height).enumerate() {
+            for (x, cell) in row.iter().take(width).enumerate() {
+                doc.layers[0].set(x, y, cell.clone());
+            }
+        }
+        doc.modified = true;
+        self.load_document(doc);
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let clipped = if block.len() > MAX || block.first().is_some_and(|r| r.len() > MAX) { " (clipped)" } else { "" };
+        self.show_status(format!("Imported {name}: {width}×{height}{clipped}"));
     }
 }
