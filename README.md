@@ -12,7 +12,7 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 |---|---|
 | **Tools** | Brush, Eraser, Flood Fill, Rectangle, Ellipse, Line, Border Box, Selection |
 | **Layers** | Add / Remove / Duplicate / Merge Down / Reorder / Rename / Lock / Hide |
-| **History** | 100-step Undo / Redo (Ctrl+Z / Ctrl+Y) |
+| **History** | 100-step Undo / Redo for drawing, layer operations and canvas resize |
 | **Characters** | 18 built-in palettes (Lines, Blocks, Math, Greek, Arrows, Nerd icons, …) + search |
 | **Colors** | Full RGBA picker, primary & secondary color slots, 16 quick-presets |
 | **Export** | Native `.vc` format (JSON), plain text `.txt`, and rendered **PNG** |
@@ -28,14 +28,14 @@ Download the latest release for your platform from the [Releases](../../releases
 
 ### Build from source
 
-**Requirements:** Rust 1.75+ and Cargo.
+**Requirements:** Rust 1.92+ and Cargo.
 
 ```bash
-git clone https://github.com/your-username/void-canvas
-cd void-canvas
+git clone https://github.com/fantommripper/VoidCanvas
+cd VoidCanvas
 cargo build --release
-./target/release/void-canvas          # Linux / macOS
-./target/release/void-canvas.exe      # Windows
+./target/release/void_canvas          # Linux / macOS
+./target/release/void_canvas.exe      # Windows
 ```
 
 ---
@@ -48,17 +48,18 @@ cargo build --release
 |---|---|
 | `Ctrl+N` | New document |
 | `Ctrl+O` | Open `.vc` file |
-| `Ctrl+S` | Save / Save as… |
+| `Ctrl+S` | Save |
+| `Ctrl+Shift+S` | Save as… |
 
 ### Edit
 
 | Shortcut | Action |
 |---|---|
 | `Ctrl+Z` | Undo |
-| `Ctrl+Y` | Redo |
-| `Ctrl+C` | Copy selection ***Not working, and I don't know why***|
-| `Ctrl+X` | Cut selection ***Not working, and I don't know why***|
-| `Ctrl+V` | Paste at cursor ***Not working, and I don't know why***|
+| `Ctrl+Y` / `Ctrl+Shift+Z` | Redo |
+| `Ctrl+C` | Copy selection (also as plain text to the system clipboard) |
+| `Ctrl+X` | Cut selection |
+| `Ctrl+V` | Paste at cursor (text copied from other apps works too) |
 | `Delete` | Delete selection |
 | `Escape` | Deselect |
 | `X` | Swap primary ↔ secondary |
@@ -83,6 +84,7 @@ cargo build --release
 |---|---|
 | Scroll | Pan |
 | `Ctrl` + Scroll | Zoom |
+| `Ctrl` + `+` / `-` / `0` | Zoom in / out / reset |
 | Middle-click drag | Pan |
 
 ---
@@ -116,6 +118,8 @@ Background and foreground RGBA colours are preserved exactly.
 src/
 ├── main.rs              Entry point, window setup, font loading
 ├── app.rs               Main editor state & event loop
+├── tests.rs             Model / history tests + headless UI tests (egui_kittest)
+├── dev.rs               Debug-only helpers (VOID_CANVAS_SCREENSHOT=out.png)
 ├── document/
 │   ├── cell.rs          Cell & Color types
 │   ├── layer.rs         Layer (grid of cells)
@@ -143,12 +147,13 @@ src/
 
 | Crate | Purpose |
 |---|---|
-| [egui](https://crates.io/crates/egui) | Immediate-mode GUI |
+| [egui](https://crates.io/crates/egui) | Immediate-mode GUI (0.35) |
 | [eframe](https://crates.io/crates/eframe) | Native window / app shell |
 | [serde](https://crates.io/crates/serde) + [serde_json](https://crates.io/crates/serde_json) | Serialisation |
 | [rfd](https://crates.io/crates/rfd) | Native file dialogs |
 | [image](https://crates.io/crates/image) | PNG encoding |
 | [ab_glyph](https://crates.io/crates/ab_glyph) | Font rasterisation for PNG export |
+| [egui_kittest](https://crates.io/crates/egui_kittest) | Headless UI tests (dev only) |
 
 ---
 

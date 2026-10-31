@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
-use super::{cell::Cell, layer::Layer};
+use super::{Changes, cell::Cell, layer::Layer};
 
+/// Layers are stored bottom → top: `layers[0]` is the background,
+/// the last layer is drawn on top of everything else.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Document {
     pub width: usize,
@@ -25,6 +27,21 @@ impl Document {
         }
     }
 
+    /// Sanity checks for a document that was just loaded from disk.
+    pub fn validate(&mut self) -> Result<(), String> {
+        if self.layers.is_empty() {
+            return Err("the file has no layers".into());
+        }
+        let damaged = self.layers.iter().find(|l| {
+            !l.is_valid() || l.width != self.width || l.height != self.height
+        });
+        if let Some(layer) = damaged {
+            return Err(format!("layer \"{}\" is damaged", layer.name));
+        }
+        self.active_layer = self.active_layer.min(self.layers.len() - 1);
+        Ok(())
+    }
+
     pub fn active_layer(&self) -> &Layer {
         &self.layers[self.active_layer]
     }
@@ -33,32 +50,28 @@ impl Document {
         &mut self.layers[self.active_layer]
     }
 
-    pub fn add_layer(&mut self) -> usize {
-        let name = format!("Layer {}", self.layers.len() + 1);
-        let idx = self.active_layer + 1;
-        self.layers.insert(idx, Layer::new(self.width, self.height, name));
-        self.active_layer = idx;
-        self.modified = true;
-        idx
+    /// A unique "Layer N" name.
+    pub fn next_layer_name(&self) -> String {
+        (self.layers.len() + 1..)
+            .map(|n| format!("Layer {n}"))
+            .find(|name| self.layers.iter().all(|l| &l.name != name))
+            .unwrap()
     }
 
-    pub fn remove_layer(&mut self) -> bool {
-        if self.layers.len() <= 1 { return false; }
-        self.layers.remove(self.active_layer);
+    pub fn insert_layer(&mut self, index: usize, layer: Layer) {
+        let index = index.min(self.layers.len());
+        self.layers.insert(index, layer);
+        self.active_layer = index;
+        self.modified = true;
+    }
+
+    pub fn take_layer(&mut self, index: usize) -> Layer {
+        let layer = self.layers.remove(index);
         if self.active_layer >= self.layers.len() {
-            self.active_layer = self.layers.len() - 1;
+            self.active_layer = self.layers.len().saturating_sub(1);
         }
         self.modified = true;
-        true
-    }
-
-    pub fn duplicate_layer(&mut self) {
-        let mut new_layer = self.layers[self.active_layer].clone();
-        new_layer.name = format!("{} (copy)", new_layer.name);
-        let idx = self.active_layer + 1;
-        self.layers.insert(idx, new_layer);
-        self.active_layer = idx;
-        self.modified = true;
+        layer
     }
 
     pub fn move_layer(&mut self, from: usize, to: usize) {
@@ -71,47 +84,30 @@ impl Document {
         self.modified = true;
     }
 
-    pub fn merge_down(&mut self) {
-        let idx = self.active_layer;
-        if idx + 1 >= self.layers.len() { return; }
-
-        let upper_cells: Vec<(usize, usize, Cell)> = {
-            let upper = &self.layers[idx];
-            let mut changes = Vec::new();
-            for y in 0..upper.height {
-                for x in 0..upper.width {
-                    if let Some(c) = upper.get(x, y) {
-                        if !c.is_empty() {
-                            changes.push((x, y, c.clone()));
-                        }
-                    }
+    /// Changes to the layer below `upper` that bake `upper` into it.
+    pub fn merge_down_changes(&self, upper: usize) -> Changes {
+        let mut changes = Changes::new();
+        if upper == 0 || upper >= self.layers.len() { return changes; }
+        let (top, bottom) = (&self.layers[upper], &self.layers[upper - 1]);
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let (Some(t), Some(b)) = (top.get(x, y), bottom.get(x, y)) else { continue };
+                let merged = t.over(b);
+                if merged != *b {
+                    changes.insert((x, y), (b.clone(), merged));
                 }
             }
-            changes
-        };
-
-        let lower = &mut self.layers[idx + 1];
-        for (x, y, cell) in upper_cells {
-            lower.set(x, y, cell);
         }
-
-        self.layers.remove(idx);
-        if self.active_layer > 0 {
-            self.active_layer -= 1;
-        }
-        self.modified = true;
+        changes
     }
 
-    pub fn composite_cell(&self, x: usize, y: usize) -> Option<&Cell> {
-        for layer in self.layers.iter().rev() {
-            if !layer.visible { continue; }
-            if let Some(cell) = layer.get(x, y) {
-                if !cell.is_empty() {
-                    return Some(cell);
-                }
-            }
-        }
-        None
+    /// What is visible at (x, y) after stacking all visible layers.
+    pub fn composite_cell(&self, x: usize, y: usize) -> Cell {
+        self.layers
+            .iter()
+            .filter(|l| l.visible)
+            .filter_map(|l| l.get(x, y))
+            .fold(Cell::empty(), |below, top| top.over(&below))
     }
 
     pub fn resize(&mut self, new_w: usize, new_h: usize) {
@@ -127,11 +123,7 @@ impl Document {
         let mut lines: Vec<String> = (0..self.height)
             .map(|y| {
                 let line: String = (0..self.width)
-                    .map(|x| {
-                        self.composite_cell(x, y)
-                            .map(|c| c.ch)
-                            .unwrap_or(' ')
-                    })
+                    .map(|x| self.composite_cell(x, y).ch)
                     .collect();
                 line.trim_end().to_string()
             })
@@ -141,20 +133,5 @@ impl Document {
             lines.pop();
         }
         lines.join("\n")
-    }
-
-    pub fn from_text(&mut self, text: &str) {
-        self.layers = vec![Layer::new(self.width, self.height, "Imported")];
-        self.active_layer = 0;
-        for (y, line) in text.lines().enumerate() {
-            if y >= self.height { break; }
-            for (x, ch) in line.chars().enumerate() {
-                if x >= self.width { break; }
-                if let Some(cell) = self.layers[0].get_mut(x, y) {
-                    cell.ch = ch;
-                }
-            }
-        }
-        self.modified = true;
     }
 }

@@ -5,10 +5,8 @@ pub mod shapes;
 pub mod border;
 pub mod selection;
 
-use std::collections::HashMap;
-use crate::document::{Cell, Color};
-
-pub type Changes = HashMap<(usize, usize), (Cell, Cell)>;
+use crate::document::Color;
+pub use crate::document::Changes;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToolType {
@@ -84,6 +82,15 @@ impl DrawContext {
     }
     pub fn current_bg(&self) -> Color {
         if self.is_primary { self.primary_bg.clone() } else { self.secondary_bg.clone() }
+    }
+}
+
+/// Folds `more` into `into`, keeping the earliest "before" and the latest "after" of each cell.
+pub fn merge_changes(into: &mut Changes, more: Changes) {
+    for (pos, (old, new)) in more {
+        into.entry(pos)
+            .and_modify(|entry| entry.1 = new.clone())
+            .or_insert((old, new));
     }
 }
 

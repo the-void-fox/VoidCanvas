@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use super::cell::Cell;
+use super::{Changes, cell::Cell};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
     pub name: String,
     pub width: usize,
@@ -25,6 +25,11 @@ impl Layer {
         }
     }
 
+    /// The cell buffer matches the declared size (checked after loading a file).
+    pub fn is_valid(&self) -> bool {
+        self.cells.len() == self.width * self.height
+    }
+
     fn idx(&self, x: usize, y: usize) -> Option<usize> {
         if x < self.width && y < self.height {
             Some(y * self.width + x)
@@ -37,14 +42,15 @@ impl Layer {
         self.idx(x, y).map(|i| &self.cells[i])
     }
 
-    pub fn get_mut(&mut self, x: usize, y: usize) -> Option<&mut Cell> {
-        self.idx(x, y).map(|i| &mut self.cells[i])
-    }
-
     pub fn set(&mut self, x: usize, y: usize, cell: Cell) -> bool {
         if self.locked {
             return false;
         }
+        self.put(x, y, cell)
+    }
+
+    /// Writes a cell even if the layer is locked (used by undo / redo).
+    pub fn put(&mut self, x: usize, y: usize, cell: Cell) -> bool {
         if let Some(i) = self.idx(x, y) {
             self.cells[i] = cell;
             true
@@ -53,10 +59,18 @@ impl Layer {
         }
     }
 
-    pub fn clear(&mut self) {
-        if !self.locked {
-            self.cells.iter_mut().for_each(|c| *c = Cell::default());
+    /// Changes that would erase every non-empty cell.
+    pub fn clear_changes(&self) -> Changes {
+        let mut changes = Changes::new();
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let cell = &self.cells[y * self.width + x];
+                if !cell.is_empty() {
+                    changes.insert((x, y), (cell.clone(), Cell::empty()));
+                }
+            }
         }
+        changes
     }
 
     pub fn resize(&mut self, new_w: usize, new_h: usize) {

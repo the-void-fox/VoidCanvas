@@ -2,6 +2,11 @@ use egui::*;
 use crate::document::Document;
 use crate::tools::*;
 
+pub const ZOOM_MIN: f32 = 0.15;
+pub const ZOOM_MAX: f32 = 8.0;
+/// Gap between the top-left of the view and the canvas at zero offset.
+const CANVAS_MARGIN: f32 = 20.0;
+
 pub struct CanvasState {
     pub zoom: f32,
     pub offset: Vec2,
@@ -10,6 +15,8 @@ pub struct CanvasState {
     pub cell_h: f32,
     pub cursor_cell: Option<(usize, usize)>,
     pub march_phase: f32,
+    /// Screen area of the canvas view in the last frame.
+    pub view_rect: Rect,
 }
 
 impl Default for CanvasState {
@@ -22,6 +29,7 @@ impl Default for CanvasState {
             cell_h: 16.0,
             cursor_cell: None,
             march_phase: 0.0,
+            view_rect: Rect::NOTHING,
         }
     }
 }
@@ -34,13 +42,25 @@ impl CanvasState {
     pub fn screen_to_cell(&self, pos: Pos2, canvas_origin: Pos2) -> Option<(usize, usize)> {
         let cs = self.cell_size();
         let rel = pos - canvas_origin - self.offset;
-        let cx = (rel.x / cs.x) as isize;
-        let cy = (rel.y / cs.y) as isize;
-        if cx >= 0 && cy >= 0 {
+        let cx = (rel.x / cs.x).floor();
+        let cy = (rel.y / cs.y).floor();
+        if cx >= 0.0 && cy >= 0.0 {
             Some((cx as usize, cy as usize))
         } else {
             None
         }
+    }
+
+    /// Like [`Self::screen_to_cell`], but always lands on a cell of the document.
+    pub fn screen_to_cell_clamped(&self, pos: Pos2, canvas_origin: Pos2, doc: &Document) -> (usize, usize) {
+        let cs = self.cell_size();
+        let rel = pos - canvas_origin - self.offset;
+        let max_x = doc.width.saturating_sub(1) as f32;
+        let max_y = doc.height.saturating_sub(1) as f32;
+        (
+            (rel.x / cs.x).floor().clamp(0.0, max_x) as usize,
+            (rel.y / cs.y).floor().clamp(0.0, max_y) as usize,
+        )
     }
 
     pub fn cell_rect(&self, x: usize, y: usize, canvas_origin: Pos2) -> Rect {
@@ -52,16 +72,35 @@ impl CanvasState {
 
     pub fn zoom_around(&mut self, factor: f32, pivot: Pos2, canvas_origin: Pos2) {
         let old_zoom = self.zoom;
-        self.zoom = (self.zoom * factor).clamp(0.15, 8.0);
+        self.zoom = (self.zoom * factor).clamp(ZOOM_MIN, ZOOM_MAX);
         let actual_factor = self.zoom / old_zoom;
         self.offset = pivot - canvas_origin - (pivot - canvas_origin - self.offset) * actual_factor;
     }
+
+    /// Where cell (x, y) was on screen in the last frame.
+    pub fn screen_cell_rect(&self, x: usize, y: usize) -> Rect {
+        self.cell_rect(x, y, canvas_origin(self.view_rect))
+    }
+
+    /// Zooms around the middle of the view (menus and keyboard shortcuts).
+    pub fn zoom_view_center(&mut self, factor: f32) {
+        if self.view_rect.is_positive() {
+            self.zoom_around(factor, self.view_rect.center(), canvas_origin(self.view_rect));
+        } else {
+            self.zoom = (self.zoom * factor).clamp(ZOOM_MIN, ZOOM_MAX);
+        }
+    }
+}
+
+fn canvas_origin(view: Rect) -> Pos2 {
+    view.min + Vec2::splat(CANVAS_MARGIN)
 }
 
 pub enum CanvasEvent {
-    Press  { x: usize, y: usize, primary: bool },
-    Drag   { x: usize, y: usize, primary: bool },
-    Release,
+    Press   { x: usize, y: usize, primary: bool },
+    Drag    { x: usize, y: usize },
+    /// Where the pointer was released, clamped to the document.
+    Release { x: usize, y: usize },
 }
 
 pub fn draw_canvas(
@@ -71,10 +110,23 @@ pub fn draw_canvas(
     ctx_tool: &DrawContext,
     active_tool: ToolType,
     tools: &mut crate::app::ToolState,
-) -> Option<CanvasEvent> {
+) -> Vec<CanvasEvent> {
     let available = ui.available_rect_before_wrap();
-    let (resp, painter) = ui.allocate_painter(available.size(), Sense::click_and_drag());
-    let origin = available.min + Vec2::splat(20.0);
+    // Drag-only sense: a press starts the stroke immediately (no click-vs-drag delay).
+    let (resp, painter) = ui.allocate_painter(available.size(), Sense::drag());
+    let origin = canvas_origin(available);
+    state.view_rect = resp.rect;
+
+    let hover_pos = ui.input(|i| i.pointer.hover_pos());
+    // While a stroke is dragged outside the canvas, keep the cursor on its edge,
+    // so shape previews match what the release will draw.
+    state.cursor_cell = if resp.dragged() {
+        ui.input(|i| i.pointer.latest_pos()).map(|p| state.screen_to_cell_clamped(p, origin, doc))
+    } else if resp.contains_pointer() {
+        hover_pos.and_then(|p| state.screen_to_cell(p, origin))
+    } else {
+        None
+    };
 
     painter.rect_filled(resp.rect, 0.0, Color32::from_rgb(28, 28, 28));
 
@@ -91,19 +143,18 @@ pub fn draw_canvas(
         for x in 0..doc.width {
             let cell_rect = state.cell_rect(x, y, origin);
             if !resp.rect.intersects(cell_rect) { continue; }
-            if let Some(cell) = doc.composite_cell(x, y) {
-                if !cell.bg.is_transparent() {
-                    painter.rect_filled(cell_rect, 0.0, cell.bg.to_egui());
-                }
-                if cell.ch != ' ' {
-                    painter.text(
-                        cell_rect.center(),
-                        Align2::CENTER_CENTER,
-                        cell.ch.to_string(),
-                        font_id.clone(),
-                        cell.fg.to_egui(),
-                    );
-                }
+            let cell = doc.composite_cell(x, y);
+            if !cell.bg.is_transparent() {
+                painter.rect_filled(cell_rect, 0.0, cell.bg.to_egui());
+            }
+            if cell.ch != ' ' {
+                painter.text(
+                    cell_rect.center(),
+                    Align2::CENTER_CENTER,
+                    cell.ch.to_string(),
+                    font_id.clone(),
+                    cell.fg.to_egui(),
+                );
             }
         }
     }
@@ -147,86 +198,62 @@ pub fn draw_canvas(
         }
     }
 
+    draw_moving_selection(tools, doc, state, &painter, origin, &font_id);
     draw_selection(tools, state, &painter, origin, state.march_phase);
 
-    let mut event: Option<CanvasEvent> = None;
+    let mut events = Vec::new();
 
-    let hover_pos = ui.ctx().input(|i| i.pointer.hover_pos());
-    let is_over_canvas = hover_pos
-        .map(|p| resp.rect.contains(p))
-        .unwrap_or(false);
-
-    state.cursor_cell = if is_over_canvas {
-        hover_pos.and_then(|p| state.screen_to_cell(p, origin))
-    } else {
-        None
-    };
-
-    if is_over_canvas {
-        ui.ctx().input(|i| {
-            if i.modifiers.ctrl {
-                let zoom = i.zoom_delta();
-                if zoom != 1.0 {
-                    if let Some(pivot) = hover_pos {
-                        state.zoom_around(zoom, pivot, origin);
-                    }
-                }
-                let raw_y = i.raw_scroll_delta.y;
-                if raw_y != 0.0 {
-                    let factor = if raw_y > 0.0 { 1.12_f32 } else { 1.0 / 1.12 };
-                    if let Some(pivot) = hover_pos {
-                        state.zoom_around(factor, pivot, origin);
-                    }
-                }
-            } else {
-                let scroll = i.smooth_scroll_delta;
-                if scroll != Vec2::ZERO {
-                    state.offset += scroll;
-                } else {
-                    let raw = i.raw_scroll_delta;
-                    if raw != Vec2::ZERO {
-                        state.offset += raw * 0.8;
-                    }
-                }
+    if resp.contains_pointer() {
+        let (zoom, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
+        if zoom != 1.0 {
+            if let Some(pivot) = hover_pos {
+                state.zoom_around(zoom, pivot, origin);
             }
-        });
+        } else if scroll != Vec2::ZERO {
+            state.offset += scroll;
+        }
     }
 
     if resp.dragged_by(PointerButton::Middle) {
         state.offset += resp.drag_delta();
     }
 
-    let drag_btn_id = resp.id.with("drag_btn");
+    let in_doc = |&(x, y): &(usize, usize)| x < doc.width && y < doc.height;
 
-    if let Some(pos) = resp.interact_pointer_pos() {
-        let cell = state.screen_to_cell(pos, origin);
-
-        if resp.drag_started_by(PointerButton::Primary) {
-            ui.ctx().data_mut(|d| d.insert_temp::<bool>(drag_btn_id, true));
-            if let Some((cx, cy)) = cell {
-                event = Some(CanvasEvent::Press { x: cx, y: cy, primary: true });
+    for (button, primary) in [(PointerButton::Primary, true), (PointerButton::Secondary, false)] {
+        if resp.drag_started_by(button) {
+            let pos = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
+            if let Some((x, y)) = pos.and_then(|p| state.screen_to_cell(p, origin)).filter(in_doc) {
+                events.push(CanvasEvent::Press { x, y, primary });
             }
-        } else if resp.drag_started_by(PointerButton::Secondary) {
-            ui.ctx().data_mut(|d| d.insert_temp::<bool>(drag_btn_id, false));
-            if let Some((cx, cy)) = cell {
-                event = Some(CanvasEvent::Press { x: cx, y: cy, primary: false });
-            }
-        } else if resp.dragged_by(PointerButton::Primary)
-               || resp.dragged_by(PointerButton::Secondary)
+        } else if resp.hovered()
+            && ui.input(|i| i.pointer.button_pressed(button) && i.pointer.button_released(button))
         {
-            let is_primary: bool = ui.ctx()
-                .data(|d| d.get_temp(drag_btn_id).unwrap_or(true));
-            if let Some((cx, cy)) = cell {
-                event = Some(CanvasEvent::Drag { x: cx, y: cy, primary: is_primary });
+            // Press and release in the same frame (e.g. touchpad tap): egui reports no drag.
+            let pos = ui.input(|i| i.pointer.latest_pos());
+            if let Some((x, y)) = pos.and_then(|p| state.screen_to_cell(p, origin)).filter(in_doc) {
+                events.push(CanvasEvent::Press { x, y, primary });
+                events.push(CanvasEvent::Release { x, y });
             }
         }
     }
 
-    if resp.drag_stopped() {
-        event = Some(CanvasEvent::Release);
+    if !resp.drag_started()
+        && (resp.dragged_by(PointerButton::Primary) || resp.dragged_by(PointerButton::Secondary))
+        && let Some((x, y)) = resp.interact_pointer_pos().and_then(|p| state.screen_to_cell(p, origin))
+    {
+        events.push(CanvasEvent::Drag { x, y });
     }
 
-    event
+    if resp.drag_stopped() {
+        let pos = ui.input(|i| i.pointer.latest_pos()).or(resp.interact_pointer_pos());
+        if let Some(pos) = pos {
+            let (x, y) = state.screen_to_cell_clamped(pos, origin, doc);
+            events.push(CanvasEvent::Release { x, y });
+        }
+    }
+
+    events
 }
 
 fn get_preview(
@@ -243,6 +270,30 @@ fn get_preview(
         ToolType::Line      => tools.line.preview(doc, x, y, ctx),
         ToolType::Border    => tools.border.preview(doc, x, y, ctx),
         _                   => vec![],
+    }
+}
+
+/// The block being moved with the Select tool; it covers what is underneath.
+fn draw_moving_selection(
+    tools: &crate::app::ToolState,
+    doc: &Document,
+    state: &CanvasState,
+    painter: &egui::Painter,
+    origin: Pos2,
+    font_id: &FontId,
+) {
+    let Some((x0, y0, content)) = tools.selection.moving_content() else { return; };
+    for (dy, row) in content.iter().enumerate() {
+        for (dx, cell) in row.iter().enumerate() {
+            let (x, y) = (x0 + dx, y0 + dy);
+            if x >= doc.width || y >= doc.height { continue; }
+            let rect = state.cell_rect(x, y, origin);
+            let bg = if cell.bg.is_transparent() { Color32::BLACK } else { cell.bg.to_egui() };
+            painter.rect_filled(rect, 0.0, bg);
+            if cell.ch != ' ' {
+                painter.text(rect.center(), Align2::CENTER_CENTER, cell.ch.to_string(), font_id.clone(), cell.fg.to_egui());
+            }
+        }
     }
 }
 

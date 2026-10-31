@@ -1,4 +1,4 @@
-use crate::document::{Cell, Document};
+use crate::document::{Cell, Color, Document};
 use super::Changes;
 
 #[derive(Default, Debug, Clone)]
@@ -14,6 +14,12 @@ pub struct SelectionTool {
 }
 
 impl SelectionTool {
+    /// Is (x, y) inside the current selection? (Pressing there moves the selection.)
+    pub fn hit(&self, x: usize, y: usize) -> bool {
+        self.selection
+            .is_some_and(|(x1, y1, x2, y2)| x >= x1 && x <= x2 && y >= y1 && y <= y2)
+    }
+
     pub fn on_press(&mut self, doc: &Document, x: usize, y: usize) -> Changes {
         if let Some(sel) = self.selection {
             let (x1, y1, x2, y2) = sel;
@@ -106,15 +112,6 @@ impl SelectionTool {
         Some(layer.get_region(x1, y1, x2, y2))
     }
 
-    pub fn cut(&mut self, doc: &mut Document) -> (Option<Vec<Vec<Cell>>>, Changes) {
-        let content = self.copy(doc);
-        if content.is_none() { return (None, Changes::new()); }
-        let sel = self.selection.unwrap();
-        let changes = clear_rect(doc, sel);
-        self.selection = None;
-        (content, changes)
-    }
-
     pub fn paste(&mut self, doc: &mut Document, content: &Vec<Vec<Cell>>, x: usize, y: usize) -> Changes {
         let h = content.len();
         let w = content.first().map(|r| r.len()).unwrap_or(0);
@@ -148,6 +145,52 @@ impl SelectionTool {
     pub fn clear(&mut self) {
         *self = Self::default();
     }
+
+    /// Content being dragged right now, with the cell it would land at.
+    pub fn moving_content(&self) -> Option<(usize, usize, &[Vec<Cell>])> {
+        if !(self.is_dragging && self.move_started) { return None; }
+        let (x1, y1, _, _) = self.selection?;
+        self.content.as_deref().map(|c| (x1, y1, c))
+    }
+}
+
+/// Plain-text form of a copied region (trailing spaces trimmed).
+pub fn content_to_text(content: &[Vec<Cell>]) -> String {
+    content
+        .iter()
+        .map(|row| row.iter().map(|c| c.ch).collect::<String>().trim_end().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Turns pasted text into a block of cells; short lines are padded with empty cells.
+pub fn text_to_content(text: &str, fg: &Color, bg: &Color) -> Vec<Vec<Cell>> {
+    const TAB: usize = 4;
+    let rows: Vec<Vec<char>> = text
+        .lines()
+        .map(|line| {
+            let mut row = Vec::new();
+            for ch in line.chars() {
+                match ch {
+                    '\t' => row.extend(std::iter::repeat_n(' ', TAB - row.len() % TAB)),
+                    c if c.is_control() => {}
+                    c => row.push(c),
+                }
+            }
+            row
+        })
+        .collect();
+    let width = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    rows.into_iter()
+        .map(|row| {
+            (0..width)
+                .map(|i| match row.get(i) {
+                    Some(&ch) => Cell::new(ch, fg.clone(), bg.clone()),
+                    None => Cell::empty(),
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn clear_rect(doc: &mut Document, rect: (usize, usize, usize, usize)) -> Changes {

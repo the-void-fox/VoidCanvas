@@ -1,15 +1,15 @@
 use eframe::egui::{self, *};
 
-use crate::document::{Cell, Document};
+use crate::document::{Cell, Changes, Document, Layer};
 use crate::history::{Command, History};
 use crate::tools::{
-    DrawContext, ToolType,
+    DrawContext, ToolType, merge_changes,
     brush::BrushTool,
     eraser::EraserTool,
     fill::FillTool,
     shapes::{RectangleTool, EllipseTool, LineTool},
     border::BorderTool,
-    selection::SelectionTool,
+    selection::{SelectionTool, content_to_text, text_to_content},
 };
 use crate::ui::{
     canvas::{CanvasEvent, CanvasState, draw_canvas},
@@ -17,6 +17,9 @@ use crate::ui::{
     layer_panel::{LayerAction, LayerPanel},
     panels::{ColorPanel, ToolOptionsPanel},
 };
+
+const APP_NAME: &str = "Void Canvas";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct ToolState {
     pub brush:     BrushTool,
@@ -44,6 +47,14 @@ impl Default for ToolState {
     }
 }
 
+/// An action that would throw away unsaved work; it waits for the user's answer.
+#[derive(Clone, Copy, PartialEq)]
+enum PendingAction {
+    New,
+    Open,
+    Quit,
+}
+
 pub struct AsciiArtEditor {
     pub doc:          Document,
     pub history:      History,
@@ -57,8 +68,14 @@ pub struct AsciiArtEditor {
     pub primary_char:   char,
     pub secondary_char: char,
     pub clipboard: Option<Vec<Vec<Cell>>>,
+    /// Text put on the system clipboard together with `clipboard`.
+    pub clipboard_text: String,
     pub drawing: bool,
     pub last_primary: bool,
+    /// Tool that started the current stroke; it gets the rest of the stroke's events.
+    pub stroke_tool: ToolType,
+    /// Changes made so far by the current Select-tool drag.
+    pub stroke_changes: Changes,
     pub status_msg: String,
     pub status_timer: f32,
     pub show_new_dialog:    bool,
@@ -67,6 +84,10 @@ pub struct AsciiArtEditor {
     pub about_tab:          usize, // 0 = About & Shortcuts, 1 = Author
     pub new_width:  usize,
     pub new_height: usize,
+    pending_action: Option<PendingAction>,
+    /// Set once the user agreed to quit, so the next close request goes through.
+    allow_close: bool,
+    window_title: String,
 }
 
 impl Default for AsciiArtEditor {
@@ -83,9 +104,12 @@ impl Default for AsciiArtEditor {
             tool_options: ToolOptionsPanel::default(),
             primary_char:   '#',
             secondary_char: '.',
-            clipboard:    None,
+            clipboard:      None,
+            clipboard_text: String::new(),
             drawing:      false,
             last_primary: true,
+            stroke_tool:    ToolType::Brush,
+            stroke_changes: Changes::new(),
             status_msg:  String::from("Ready"),
             status_timer: 0.0,
             show_new_dialog:    false,
@@ -94,6 +118,9 @@ impl Default for AsciiArtEditor {
             about_tab:          0,
             new_width:  80,
             new_height: 40,
+            pending_action: None,
+            allow_close:    false,
+            window_title:   String::new(),
         }
     }
 }
@@ -112,78 +139,89 @@ impl AsciiArtEditor {
         }
     }
 
+    /// Records changes that were already applied to the active layer.
+    fn commit_draw(&mut self, changes: Changes) {
+        if changes.is_empty() { return; }
+        self.history.push(Command::Draw { layer_idx: self.doc.active_layer, changes });
+        self.doc.modified = true;
+    }
+
+    /// Shows a message and returns `true` if the active layer can't be edited.
+    fn active_layer_locked(&mut self) -> bool {
+        let locked = self.doc.active_layer().locked;
+        if locked {
+            self.show_status("Layer is locked");
+        }
+        locked
+    }
+
     fn handle_canvas_event(&mut self, event: CanvasEvent) {
         match event {
             CanvasEvent::Press { x, y, primary } => {
-                self.drawing = true;
-                self.last_primary = primary;
-                let ctx = self.draw_context(primary);
+                if self.drawing { return; }
+                let tool = self.active_tool;
+                let edits = tool != ToolType::Select || self.tools.selection.hit(x, y);
+                if edits && self.active_layer_locked() { return; }
+
                 self.sync_tool_options();
+                let ctx = self.draw_context(primary);
 
-                let changes = match self.active_tool {
-                    ToolType::Brush  => self.tools.brush.on_press(&mut self.doc, x, y, &ctx),
-                    ToolType::Eraser => self.tools.eraser.on_press(&mut self.doc, x, y, &ctx),
-                    ToolType::Fill => {
-                        let c = self.tools.fill.flood_fill(&mut self.doc, x, y, &ctx);
-                        if !c.is_empty() {
-                            self.history.push(Command::Draw {
-                                layer_idx: self.doc.active_layer,
-                                changes: c,
-                            });
-                            self.doc.modified = true;
-                        }
-                        return;
-                    }
-                    ToolType::Rectangle => { self.tools.rect.on_press(x, y);    return; }
-                    ToolType::Ellipse   => { self.tools.ellipse.on_press(x, y); return; }
-                    ToolType::Line      => { self.tools.line.on_press(x, y);    return; }
-                    ToolType::Border    => { self.tools.border.on_press(x, y);  return; }
-                    ToolType::Select => {
-                        self.tools.selection.on_press(&self.doc, x, y);
-                        return;
-                    }
-                };
+                if tool == ToolType::Fill {
+                    let changes = self.tools.fill.flood_fill(&mut self.doc, x, y, &ctx);
+                    self.commit_draw(changes);
+                    return;
+                }
 
-                if !changes.is_empty() { self.doc.modified = true; }
+                self.drawing = true;
+                self.stroke_tool = tool;
+                self.last_primary = primary;
+                self.stroke_changes.clear();
+
+                match tool {
+                    ToolType::Brush     => { self.tools.brush.on_press(&mut self.doc, x, y, &ctx); }
+                    ToolType::Eraser    => { self.tools.eraser.on_press(&mut self.doc, x, y, &ctx); }
+                    ToolType::Rectangle => self.tools.rect.on_press(x, y),
+                    ToolType::Ellipse   => self.tools.ellipse.on_press(x, y),
+                    ToolType::Line      => self.tools.line.on_press(x, y),
+                    ToolType::Border    => self.tools.border.on_press(x, y),
+                    ToolType::Select    => { self.tools.selection.on_press(&self.doc, x, y); }
+                    ToolType::Fill      => {}
+                }
             }
 
-            CanvasEvent::Drag { x, y, primary } => {
-                let ctx = self.draw_context(primary);
-                match self.active_tool {
+            CanvasEvent::Drag { x, y } => {
+                if !self.drawing { return; }
+                let ctx = self.draw_context(self.last_primary);
+                match self.stroke_tool {
                     ToolType::Brush  => { self.tools.brush.on_drag(&mut self.doc, x, y, &ctx); }
                     ToolType::Eraser => { self.tools.eraser.on_drag(&mut self.doc, x, y, &ctx); }
-                    ToolType::Select => { self.tools.selection.on_drag(&mut self.doc, x, y); }
+                    ToolType::Select => {
+                        let changes = self.tools.selection.on_drag(&mut self.doc, x, y);
+                        merge_changes(&mut self.stroke_changes, changes);
+                    }
                     _ => {}
                 }
-                self.doc.modified = true;
             }
 
-            CanvasEvent::Release => {
+            CanvasEvent::Release { x, y } => {
                 if !self.drawing { return; }
                 self.drawing = false;
 
-                let primary = self.last_primary;
-                let ctx = self.draw_context(primary);
-                let cur = self.canvas_state.cursor_cell.unwrap_or((0, 0));
-
-                let changes = match self.active_tool {
-                    ToolType::Brush  => self.tools.brush.on_release(),
-                    ToolType::Eraser => self.tools.eraser.on_release(),
-                    ToolType::Rectangle => self.tools.rect.on_release(&mut self.doc, cur.0, cur.1, &ctx),
-                    ToolType::Ellipse   => self.tools.ellipse.on_release(&mut self.doc, cur.0, cur.1, &ctx),
-                    ToolType::Line      => self.tools.line.on_release(&mut self.doc, cur.0, cur.1, &ctx),
-                    ToolType::Border    => self.tools.border.on_release(&mut self.doc, cur.0, cur.1, &ctx),
+                let ctx = self.draw_context(self.last_primary);
+                let changes = match self.stroke_tool {
+                    ToolType::Brush     => self.tools.brush.on_release(),
+                    ToolType::Eraser    => self.tools.eraser.on_release(),
+                    ToolType::Rectangle => self.tools.rect.on_release(&mut self.doc, x, y, &ctx),
+                    ToolType::Ellipse   => self.tools.ellipse.on_release(&mut self.doc, x, y, &ctx),
+                    ToolType::Line      => self.tools.line.on_release(&mut self.doc, x, y, &ctx),
+                    ToolType::Border    => self.tools.border.on_release(&mut self.doc, x, y, &ctx),
                     ToolType::Select    => self.tools.selection.on_release(&mut self.doc),
-                    _ => Default::default(),
+                    ToolType::Fill      => Changes::new(),
                 };
 
-                if !changes.is_empty() {
-                    self.history.push(Command::Draw {
-                        layer_idx: self.doc.active_layer,
-                        changes,
-                    });
-                    self.doc.modified = true;
-                }
+                let mut all = std::mem::take(&mut self.stroke_changes);
+                merge_changes(&mut all, changes);
+                self.commit_draw(all);
             }
         }
     }
@@ -195,114 +233,338 @@ impl AsciiArtEditor {
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
-        let (ctrl_c, ctrl_x, ctrl_v, ctrl_z, ctrl_y, ctrl_n, ctrl_s, ctrl_o) = ctx.input_mut(|i| {
-            let c = i.consume_key(egui::Modifiers::CTRL, Key::C);
-            let x = i.consume_key(egui::Modifiers::CTRL, Key::X);
-            let v = i.consume_key(egui::Modifiers::CTRL, Key::V);
-            let z = i.consume_key(egui::Modifiers::CTRL, Key::Z);
-            let y = i.consume_key(egui::Modifiers::CTRL, Key::Y);
-            let n = i.consume_key(egui::Modifiers::CTRL, Key::N);
-            let s = i.consume_key(egui::Modifiers::CTRL, Key::S);
-            let o = i.consume_key(egui::Modifiers::CTRL, Key::O);
-            (c, x, v, z, y, n, s, o)
+        // Keys typed into a text field (char search, layer rename, …) belong to that field.
+        if ctx.text_edit_focused() || self.pending_action.is_some() { return; }
+
+        // Ctrl+C / Ctrl+X / Ctrl+V arrive as Copy / Cut / Paste events, not as key presses.
+        let (copy, cut, paste) = ctx.input(|i| {
+            let mut out = (false, false, None);
+            for event in &i.events {
+                match event {
+                    Event::Copy        => out.0 = true,
+                    Event::Cut         => out.1 = true,
+                    Event::Paste(text) => out.2 = Some(text.clone()),
+                    _ => {}
+                }
+            }
+            out
+        });
+        if copy { self.copy(ctx); }
+        if cut { self.cut(ctx); }
+        if let Some(text) = paste { self.paste(Some(text)); }
+
+        let cmd = Modifiers::COMMAND;
+        let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
+        // Most specific shortcuts first: consume_key ignores extra Shift.
+        let (save_as, save, open, new, redo, undo, zoom_in, zoom_out, zoom_reset) = ctx.input_mut(|i| (
+            i.consume_key(cmd_shift, Key::S),
+            i.consume_key(cmd, Key::S),
+            i.consume_key(cmd, Key::O),
+            i.consume_key(cmd, Key::N),
+            i.consume_key(cmd_shift, Key::Z) || i.consume_key(cmd, Key::Y),
+            i.consume_key(cmd, Key::Z),
+            i.consume_key(cmd, Key::Plus) || i.consume_key(cmd, Key::Equals),
+            i.consume_key(cmd, Key::Minus),
+            i.consume_key(cmd, Key::Num0),
+        ));
+
+        if !self.drawing {
+            if undo && self.history.undo(&mut self.doc) { self.show_status("Undo"); }
+            if redo && self.history.redo(&mut self.doc) { self.show_status("Redo"); }
+        }
+        if new { self.request(PendingAction::New, ctx); }
+        if open { self.request(PendingAction::Open, ctx); }
+        if save_as { self.save_as(); } else if save { self.save(); }
+        if zoom_in { self.canvas_state.zoom_view_center(1.25); }
+        if zoom_out { self.canvas_state.zoom_view_center(1.0 / 1.25); }
+        if zoom_reset { self.canvas_state.zoom = 1.0; }
+
+        let tool_keys = [
+            (Key::B, ToolType::Brush),
+            (Key::E, ToolType::Eraser),
+            (Key::F, ToolType::Fill),
+            (Key::R, ToolType::Rectangle),
+            (Key::O, ToolType::Ellipse),
+            (Key::L, ToolType::Line),
+            (Key::D, ToolType::Border),
+            (Key::S, ToolType::Select),
+        ];
+        let (tool, bigger, smaller, swap, delete, deselect) = ctx.input(|i| {
+            if i.modifiers.command || i.modifiers.alt {
+                return (None, false, false, false, false, false);
+            }
+            (
+                tool_keys.iter().find(|(key, _)| i.key_pressed(*key)).map(|&(_, t)| t),
+                i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals),
+                i.key_pressed(Key::Minus),
+                i.key_pressed(Key::X),
+                i.key_pressed(Key::Delete),
+                i.key_pressed(Key::Escape),
+            )
         });
 
-        if ctrl_c { self.copy(); }
-        if ctrl_x { self.cut(); }
-        if ctrl_v { self.paste(); }
-        if ctrl_z {
-            if self.history.undo(&mut self.doc) {
-                self.show_status("Undo");
-            }
+        if let Some(tool) = tool { self.active_tool = tool; }
+        if bigger { self.tool_options.brush_size = (self.tool_options.brush_size + 1).min(20); }
+        if smaller { self.tool_options.brush_size = self.tool_options.brush_size.saturating_sub(1).max(1); }
+        if swap {
+            std::mem::swap(&mut self.primary_char, &mut self.secondary_char);
+            std::mem::swap(&mut self.color_panel.primary_fg, &mut self.color_panel.secondary_fg);
+            std::mem::swap(&mut self.color_panel.primary_bg, &mut self.color_panel.secondary_bg);
         }
-        if ctrl_y {
-            if self.history.redo(&mut self.doc) {
-                self.show_status("Redo");
-            }
-        }
-        if ctrl_n {
-            self.new_width  = self.doc.width;
-            self.new_height = self.doc.height;
-            self.show_new_dialog = true;
-        }
-        if ctrl_s { self.save(); }
-        if ctrl_o { self.open(); }
-
-        ctx.input(|i| {
-            if i.key_pressed(Key::B) { self.active_tool = ToolType::Brush; }
-            if i.key_pressed(Key::E) { self.active_tool = ToolType::Eraser; }
-            if i.key_pressed(Key::F) { self.active_tool = ToolType::Fill; }
-            if i.key_pressed(Key::R) { self.active_tool = ToolType::Rectangle; }
-            if i.key_pressed(Key::O) { self.active_tool = ToolType::Ellipse; }
-            if i.key_pressed(Key::L) { self.active_tool = ToolType::Line; }
-            if i.key_pressed(Key::D) { self.active_tool = ToolType::Border; }
-            if i.key_pressed(Key::S) { self.active_tool = ToolType::Select; }
-
-            if i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals) {
-                self.tool_options.brush_size = (self.tool_options.brush_size + 1).min(20);
-            }
-            if i.key_pressed(Key::Minus) {
-                self.tool_options.brush_size = self.tool_options.brush_size.saturating_sub(1).max(1);
-            }
-
-            if i.key_pressed(Key::X) && !i.modifiers.ctrl {
-                std::mem::swap(&mut self.primary_char, &mut self.secondary_char);
-                std::mem::swap(&mut self.color_panel.primary_fg, &mut self.color_panel.secondary_fg);
-                std::mem::swap(&mut self.color_panel.primary_bg, &mut self.color_panel.secondary_bg);
-            }
-
-            if i.key_pressed(Key::Delete) { self.delete_selection(); }
-            if i.key_pressed(Key::Escape) {
-                self.tools.selection.selection = None;
-            }
-        });
+        if delete && !self.drawing { self.delete_selection(); }
+        if deselect && !self.drawing { self.tools.selection.selection = None; }
     }
 
-    fn copy(&mut self) {
-        self.clipboard = self.tools.selection.copy(&self.doc);
-        if self.clipboard.is_some() {
-            self.show_status("Copied selection");
-        }
+    // ── Clipboard ────────────────────────────────────────────────────────────
+
+    /// Copies the selected part of the active layer, also as plain text to the system clipboard.
+    fn copy(&mut self, ctx: &egui::Context) -> bool {
+        let Some(content) = self.tools.selection.copy(&self.doc) else {
+            self.show_status("Nothing selected");
+            return false;
+        };
+        self.clipboard_text = content_to_text(&content);
+        ctx.copy_text(self.clipboard_text.clone());
+        self.clipboard = Some(content);
+        self.show_status("Copied selection");
+        true
     }
 
-    fn cut(&mut self) {
-        let (content, changes) = self.tools.selection.cut(&mut self.doc);
-        if let Some(c) = content {
-            self.clipboard = Some(c);
-            if !changes.is_empty() {
-                self.history.push(Command::Draw { layer_idx: self.doc.active_layer, changes });
-                self.doc.modified = true;
-            }
+    fn cut(&mut self, ctx: &egui::Context) {
+        if self.tools.selection.selection.is_none() {
+            self.show_status("Nothing selected");
+            return;
+        }
+        if self.active_layer_locked() { return; }
+        if self.copy(ctx) {
+            let changes = self.tools.selection.delete(&mut self.doc);
+            self.commit_draw(changes);
             self.show_status("Cut selection");
         }
     }
 
-    fn paste(&mut self) {
-        if let Some(content) = self.clipboard.clone() {
-            let (x, y) = self.canvas_state.cursor_cell.unwrap_or((0, 0));
-            let changes = self.tools.selection.paste(&mut self.doc, &content, x, y);
-            if !changes.is_empty() {
-                self.history.push(Command::Draw { layer_idx: self.doc.active_layer, changes });
-                self.doc.modified = true;
-                self.show_status("Pasted");
+    /// Pastes our own clipboard, or `text` from the system clipboard when it holds something else.
+    fn paste(&mut self, text: Option<String>) {
+        if self.active_layer_locked() { return; }
+        let content = match (&self.clipboard, text) {
+            (Some(own), Some(text)) if text.trim_end() == self.clipboard_text.trim_end() => own.clone(),
+            (_, Some(text)) => text_to_content(&text, &self.color_panel.primary_fg, &self.color_panel.primary_bg),
+            (Some(own), None) => own.clone(),
+            (None, None) => {
+                self.show_status("Clipboard is empty");
+                return;
             }
-        } else {
+        };
+        if content.first().is_none_or(|row| row.is_empty()) {
             self.show_status("Clipboard is empty");
+            return;
         }
+
+        let (w, h) = (self.doc.width, self.doc.height);
+        let (x, y) = self.canvas_state.cursor_cell
+            .filter(|&(x, y)| x < w && y < h)
+            .or(self.tools.selection.selection.map(|(x1, y1, _, _)| (x1, y1)))
+            .unwrap_or((0, 0));
+        let changes = self.tools.selection.paste(&mut self.doc, &content, x, y);
+        self.commit_draw(changes);
+        self.show_status("Pasted");
     }
 
     fn delete_selection(&mut self) {
+        if self.tools.selection.selection.is_none() || self.active_layer_locked() { return; }
         let changes = self.tools.selection.delete(&mut self.doc);
-        if !changes.is_empty() {
-            self.history.push(Command::Draw { layer_idx: self.doc.active_layer, changes });
-            self.doc.modified = true;
-        }
+        self.commit_draw(changes);
+    }
+
+    // ── Layers & canvas (all undoable) ───────────────────────────────────────
+
+    fn apply_layer_action(&mut self, action: LayerAction) {
+        let n = self.doc.layers.len();
+        let active = self.doc.active_layer;
+
+        let cmd = match action {
+            LayerAction::Select(i) => {
+                if i < n { self.doc.active_layer = i; }
+                return;
+            }
+            LayerAction::ToggleVisible(i) => {
+                if let Some(layer) = self.doc.layers.get_mut(i) {
+                    layer.visible = !layer.visible;
+                    self.doc.modified = true;
+                }
+                return;
+            }
+            LayerAction::ToggleLock(i) => {
+                if let Some(layer) = self.doc.layers.get_mut(i) {
+                    layer.locked = !layer.locked;
+                    self.doc.modified = true;
+                }
+                return;
+            }
+            LayerAction::Add => Command::LayerAdd {
+                index: active + 1,
+                layer: Layer::new(self.doc.width, self.doc.height, self.doc.next_layer_name()),
+            },
+            LayerAction::Duplicate => {
+                let mut layer = self.doc.active_layer().clone();
+                layer.name = format!("{} (copy)", layer.name);
+                Command::LayerAdd { index: active + 1, layer }
+            }
+            LayerAction::Remove => {
+                if n <= 1 { return; }
+                Command::LayerRemove { index: active, layer: self.doc.active_layer().clone() }
+            }
+            LayerAction::MergeDown => {
+                if active == 0 { return; }
+                if self.doc.layers[active].locked || self.doc.layers[active - 1].locked {
+                    self.show_status("Can't merge a locked layer");
+                    return;
+                }
+                Command::LayerMergeDown {
+                    upper:   active,
+                    layer:   self.doc.active_layer().clone(),
+                    changes: self.doc.merge_down_changes(active),
+                }
+            }
+            LayerAction::MoveUp => {
+                if active + 1 >= n { return; }
+                Command::LayerMove { from: active, to: active + 1 }
+            }
+            LayerAction::MoveDown => {
+                if active == 0 { return; }
+                Command::LayerMove { from: active, to: active - 1 }
+            }
+            LayerAction::Reorder(from, to) => {
+                if from == to || from >= n || to >= n { return; }
+                Command::LayerMove { from, to }
+            }
+            LayerAction::Rename(i, name) => {
+                let name = name.trim().to_string();
+                if i >= n || name.is_empty() || name == self.doc.layers[i].name { return; }
+                Command::LayerRename { index: i, old: self.doc.layers[i].name.clone(), new: name }
+            }
+        };
+        self.history.execute(cmd, &mut self.doc);
+    }
+
+    fn clear_layer(&mut self) {
+        if self.active_layer_locked() { return; }
+        let changes = self.doc.active_layer().clear_changes();
+        if changes.is_empty() { return; }
+        let layer_idx = self.doc.active_layer;
+        self.history.execute(Command::Draw { layer_idx, changes }, &mut self.doc);
+    }
+
+    fn resize_canvas(&mut self, width: usize, height: usize) {
+        if (width, height) == (self.doc.width, self.doc.height) { return; }
+        let cmd = Command::Resize {
+            old_size:   (self.doc.width, self.doc.height),
+            new_size:   (width, height),
+            old_layers: self.doc.layers.clone(),
+        };
+        self.history.execute(cmd, &mut self.doc);
+        self.tools.selection.clear();
     }
 
     fn show_status(&mut self, msg: impl Into<String>) {
         self.status_msg = msg.into();
         self.status_timer = 3.0;
     }
+
+    // ── Unsaved changes ──────────────────────────────────────────────────────
+
+    /// Runs `action` right away, or asks first if there are unsaved changes.
+    fn request(&mut self, action: PendingAction, ctx: &egui::Context) {
+        if self.doc.modified {
+            self.pending_action = Some(action);
+        } else {
+            self.perform(action, ctx);
+        }
+    }
+
+    fn perform(&mut self, action: PendingAction, ctx: &egui::Context) {
+        match action {
+            PendingAction::New => {
+                self.new_width  = self.doc.width;
+                self.new_height = self.doc.height;
+                self.show_new_dialog = true;
+            }
+            PendingAction::Open => self.open(),
+            PendingAction::Quit => {
+                self.allow_close = true;
+                ctx.send_viewport_cmd(ViewportCommand::Close);
+            }
+        }
+    }
+
+    /// Intercepts closing the window while there are unsaved changes.
+    fn handle_close_request(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close && self.doc.modified {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            self.pending_action = Some(PendingAction::Quit);
+        }
+    }
+
+    fn unsaved_changes_modal(&mut self, ctx: &egui::Context) {
+        enum Choice { Save, Discard, Cancel }
+
+        let Some(action) = self.pending_action else { return };
+        let what = match action {
+            PendingAction::New  => "creating a new document",
+            PendingAction::Open => "opening another file",
+            PendingAction::Quit => "quitting",
+        };
+        let name = self.doc_name();
+
+        let mut choice = None;
+        let modal = Modal::new(Id::new("unsaved_changes")).show(ctx, |ui| {
+            ui.set_width(340.0);
+            ui.heading("Unsaved changes");
+            ui.add_space(6.0);
+            ui.label(format!("Save changes to \"{name}\" before {what}?"));
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button("Save").clicked()       { choice = Some(Choice::Save); }
+                if ui.button("Don't Save").clicked() { choice = Some(Choice::Discard); }
+                if ui.button("Cancel").clicked()     { choice = Some(Choice::Cancel); }
+            });
+        });
+        if choice.is_none() && modal.should_close() {
+            choice = Some(Choice::Cancel);
+        }
+
+        match choice {
+            Some(Choice::Save) => {
+                self.pending_action = None;
+                if self.save() { self.perform(action, ctx); }
+            }
+            Some(Choice::Discard) => {
+                self.pending_action = None;
+                self.perform(action, ctx);
+            }
+            Some(Choice::Cancel) => self.pending_action = None,
+            None => {}
+        }
+    }
+
+    fn doc_name(&self) -> String {
+        self.doc.file_path
+            .as_deref()
+            .and_then(|p| std::path::Path::new(p).file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Untitled".to_string())
+    }
+
+    fn update_title(&mut self, ctx: &egui::Context) {
+        let dirty = if self.doc.modified { "*" } else { "" };
+        let title = format!("{}{dirty} — {APP_NAME}", self.doc_name());
+        if title != self.window_title {
+            ctx.send_viewport_cmd(ViewportCommand::Title(title.clone()));
+            self.window_title = title;
+        }
+    }
+
+    // ── Dialogs ──────────────────────────────────────────────────────────────
 
     fn new_doc_dialog(&mut self, ctx: &egui::Context) {
         let mut open = self.show_new_dialog;
@@ -312,11 +574,11 @@ impl AsciiArtEditor {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Width:");
-                    ui.add(DragValue::new(&mut self.new_width).clamp_range(1..=500usize));
+                    ui.add(DragValue::new(&mut self.new_width).range(1..=500usize));
                 });
                 ui.horizontal(|ui| {
                     ui.label("Height:");
-                    ui.add(DragValue::new(&mut self.new_height).clamp_range(1..=500usize));
+                    ui.add(DragValue::new(&mut self.new_height).range(1..=500usize));
                 });
                 ui.horizontal(|ui| {
                     for (label, w, h) in [("40×25",40,25),("80×25",80,25),("80×40",80,40),("120×50",120,50)] {
@@ -328,6 +590,7 @@ impl AsciiArtEditor {
                     if ui.button("Create").clicked() {
                         self.doc = Document::new(self.new_width, self.new_height);
                         self.history.clear();
+                        self.tools.selection.clear();
                         self.show_new_dialog = false;
                     }
                     if ui.button("Cancel").clicked() {
@@ -335,7 +598,7 @@ impl AsciiArtEditor {
                     }
                 });
             });
-        self.show_new_dialog = open;
+        self.show_new_dialog &= open;
     }
 
     fn resize_dialog(&mut self, ctx: &egui::Context) {
@@ -347,15 +610,15 @@ impl AsciiArtEditor {
                 ui.label(format!("Current: {}×{}", self.doc.width, self.doc.height));
                 ui.horizontal(|ui| {
                     ui.label("Width:");
-                    ui.add(DragValue::new(&mut self.new_width).clamp_range(1..=500usize));
+                    ui.add(DragValue::new(&mut self.new_width).range(1..=500usize));
                 });
                 ui.horizontal(|ui| {
                     ui.label("Height:");
-                    ui.add(DragValue::new(&mut self.new_height).clamp_range(1..=500usize));
+                    ui.add(DragValue::new(&mut self.new_height).range(1..=500usize));
                 });
                 ui.horizontal(|ui| {
                     if ui.button("Resize").clicked() {
-                        self.doc.resize(self.new_width, self.new_height);
+                        self.resize_canvas(self.new_width, self.new_height);
                         self.show_resize_dialog = false;
                     }
                     if ui.button("Cancel").clicked() {
@@ -363,7 +626,7 @@ impl AsciiArtEditor {
                     }
                 });
             });
-        self.show_resize_dialog = open;
+        self.show_resize_dialog &= open;
     }
 
     fn about_dialog(&mut self, ctx: &egui::Context) {
@@ -404,7 +667,7 @@ impl AsciiArtEditor {
                                     .strong(),
                             );
                             ui.label(
-                                egui::RichText::new("v1.0.1")
+                                egui::RichText::new(format!("v{VERSION}"))
                                     .size(14.0)
                                     .color(egui::Color32::from_gray(160)),
                             );
@@ -429,13 +692,14 @@ impl AsciiArtEditor {
                                 ui.end_row();
                                 ui.label("Ctrl+N"); ui.label("New document"); ui.end_row();
                                 ui.label("Ctrl+O"); ui.label("Open…"); ui.end_row();
-                                ui.label("Ctrl+S"); ui.label("Save / Save as…"); ui.end_row();
+                                ui.label("Ctrl+S"); ui.label("Save"); ui.end_row();
+                                ui.label("Ctrl+Shift+S"); ui.label("Save as…"); ui.end_row();
 
                                 ui.add_space(4.0); ui.end_row();
                                 header(ui, "── Edit ──");
                                 ui.end_row();
                                 ui.label("Ctrl+Z"); ui.label("Undo"); ui.end_row();
-                                ui.label("Ctrl+Y"); ui.label("Redo"); ui.end_row();
+                                ui.label("Ctrl+Y / Ctrl+Shift+Z"); ui.label("Redo"); ui.end_row();
                                 ui.label("Ctrl+C"); ui.label("Copy selection"); ui.end_row();
                                 ui.label("Ctrl+X"); ui.label("Cut selection"); ui.end_row();
                                 ui.label("Ctrl+V"); ui.label("Paste at cursor"); ui.end_row();
@@ -460,6 +724,8 @@ impl AsciiArtEditor {
                                 ui.end_row();
                                 ui.label("Scroll");      ui.label("Pan canvas"); ui.end_row();
                                 ui.label("Ctrl+Scroll"); ui.label("Zoom in / out"); ui.end_row();
+                                ui.label("Ctrl+ +/–/0"); ui.label("Zoom in / out / reset"); ui.end_row();
+                                ui.label("Middle drag"); ui.label("Pan canvas"); ui.end_row();
                                 ui.label("+  /  –");      ui.label("Brush size up / down"); ui.end_row();
                             });
 
@@ -576,7 +842,7 @@ impl AsciiArtEditor {
                 let px_base = cx as u32 * cell_w;
                 let py_base = cy as u32 * cell_h;
 
-                let Some(cell) = self.doc.composite_cell(cx, cy) else { continue };
+                let cell = self.doc.composite_cell(cx, cy);
 
                 if !cell.bg.is_transparent() {
                     let [r, g, b, a] = [cell.bg.r, cell.bg.g, cell.bg.b, cell.bg.a];
@@ -646,66 +912,96 @@ impl AsciiArtEditor {
 
     // ── File I/O ─────────────────────────────────────────────────────────────
 
-    fn save(&mut self) {
-        let path = if let Some(p) = &self.doc.file_path {
-            Some(p.clone())
-        } else {
-            rfd::FileDialog::new()
-                .add_filter("Void Canvas", &["vc"])
-                .save_file()
-                .map(|p| {
-                    let mut p = p;
-                    if p.extension().map_or(true, |ext| ext != "vc") {
-                        p.set_extension("vc");
-                    }
-                    p.to_string_lossy().to_string()
-                })
-        };
+    /// Saves to the current file (asks for a path the first time). Returns `true` on success.
+    fn save(&mut self) -> bool {
+        match self.doc.file_path.clone() {
+            Some(path) => self.write_file(path),
+            None => self.save_as(),
+        }
+    }
 
-        if let Some(path) = path {
-            let data = serde_json::to_string_pretty(&self.doc).unwrap_or_default();
-            if std::fs::write(&path, data).is_ok() {
-                self.doc.file_path = Some(path.clone());
+    fn save_as(&mut self) -> bool {
+        let file_name = format!(
+            "{}.vc",
+            std::path::Path::new(&self.doc_name()).file_stem().unwrap_or_default().to_string_lossy()
+        );
+        let Some(mut path) = rfd::FileDialog::new()
+            .add_filter("Void Canvas", &["vc"])
+            .set_file_name(file_name)
+            .save_file()
+        else {
+            return false;
+        };
+        if path.extension().is_none_or(|ext| ext != "vc") {
+            path.set_extension("vc");
+        }
+        self.write_file(path.to_string_lossy().to_string())
+    }
+
+    /// Writes next to the target first and then renames, so a failed write can't wipe the old file.
+    fn write_file(&mut self, path: String) -> bool {
+        let data = match serde_json::to_string_pretty(&self.doc) {
+            Ok(data) => data,
+            Err(e) => {
+                self.show_status(format!("Save failed: {e}"));
+                return false;
+            }
+        };
+        let tmp = format!("{path}.tmp");
+        let result = std::fs::write(&tmp, data).and_then(|_| std::fs::rename(&tmp, &path));
+        match result {
+            Ok(()) => {
+                self.doc.file_path = Some(path);
                 self.doc.modified = false;
-                let name = std::path::Path::new(&path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or(path.clone());
-                self.show_status(format!("Saved: {name}"));
-            } else {
-                self.show_status("Save failed!");
+                self.show_status(format!("Saved: {}", self.doc_name()));
+                true
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                self.show_status(format!("Save failed: {e}"));
+                false
             }
         }
     }
 
     fn open(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
+        let Some(path) = rfd::FileDialog::new()
             .add_filter("Void Canvas", &["vc"])
             .pick_file()
-        {
-            if let Ok(data) = std::fs::read_to_string(&path) {
-                if let Ok(mut doc) = serde_json::from_str::<Document>(&data) {
-                    doc.file_path = Some(path.to_string_lossy().to_string());
-                    self.doc = doc;
-                    self.history.clear();
-                    let name = path.file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    self.show_status(format!("Opened: {name}"));
-                } else {
-                    self.show_status("Failed to parse file");
-                }
-            } else {
-                self.show_status("Failed to read file");
+        else {
+            return;
+        };
+        let data = match std::fs::read_to_string(&path) {
+            Ok(data) => data,
+            Err(e) => {
+                self.show_status(format!("Failed to read file: {e}"));
+                return;
             }
+        };
+        let mut doc = match serde_json::from_str::<Document>(&data) {
+            Ok(doc) => doc,
+            Err(e) => {
+                self.show_status(format!("Failed to parse file: {e}"));
+                return;
+            }
+        };
+        if let Err(e) = doc.validate() {
+            self.show_status(format!("Can't open file: {e}"));
+            return;
         }
+        doc.file_path = Some(path.to_string_lossy().to_string());
+        self.doc = doc;
+        self.history.clear();
+        self.tools.selection.clear();
+        self.show_status(format!("Opened: {}", self.doc_name()));
     }
 }
 
 // ── eframe::App ──────────────────────────────────────────────────────────────
 
 impl eframe::App for AsciiArtEditor {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         let dt = ctx.input(|i| i.unstable_dt);
         self.canvas_state.march_phase = (self.canvas_state.march_phase + dt * 0.5) % 1.0;
         if self.tools.selection.selection.is_some() {
@@ -714,52 +1010,60 @@ impl eframe::App for AsciiArtEditor {
 
         if self.status_timer > 0.0 {
             self.status_timer -= dt;
+            ctx.request_repaint_after_secs(self.status_timer.max(0.0));
         }
 
-        self.handle_keyboard(ctx);
-        self.new_doc_dialog(ctx);
-        self.resize_dialog(ctx);
-        self.about_dialog(ctx);
+        self.handle_close_request(&ctx);
+        self.handle_keyboard(&ctx);
+        self.new_doc_dialog(&ctx);
+        self.resize_dialog(&ctx);
+        self.about_dialog(&ctx);
+        self.unsaved_changes_modal(&ctx);
 
         // ── Menu bar ─────────────────────────────────────────────────────────
-        egui::TopBottomPanel::top("menu").show(ctx, |ui| {
-            menu::bar(ui, |ui| {
+        egui::Panel::top("menu").show(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("New…       Ctrl+N").clicked() {
-                        self.new_width  = self.doc.width;
-                        self.new_height = self.doc.height;
-                        self.show_new_dialog = true;
-                        ui.close_menu();
+                    if ui.add(Button::new("New…").shortcut_text("Ctrl+N")).clicked() {
+                        self.request(PendingAction::New, &ctx);
                     }
-                    if ui.button("Open…      Ctrl+O").clicked() { self.open(); ui.close_menu(); }
-                    if ui.button("Save        Ctrl+S").clicked() { self.save(); ui.close_menu(); }
+                    if ui.add(Button::new("Open…").shortcut_text("Ctrl+O")).clicked() {
+                        self.request(PendingAction::Open, &ctx);
+                    }
+                    if ui.add(Button::new("Save").shortcut_text("Ctrl+S")).clicked() { self.save(); }
+                    if ui.add(Button::new("Save As…").shortcut_text("Ctrl+Shift+S")).clicked() { self.save_as(); }
                     ui.separator();
-                    if ui.button("Export Text…").clicked() { self.export_text(); ui.close_menu(); }
-                    if ui.button("Export PNG…").clicked()  { self.export_png();  ui.close_menu(); }
+                    if ui.button("Export Text…").clicked() { self.export_text(); }
+                    if ui.button("Export PNG…").clicked()  { self.export_png(); }
                     ui.separator();
-                    if ui.button("Quit").clicked() { std::process::exit(0); }
+                    if ui.button("Quit").clicked() { self.request(PendingAction::Quit, &ctx); }
                 });
 
                 ui.menu_button("Edit", |ui| {
-                    if ui.add_enabled(self.history.can_undo(), egui::Button::new("Undo  Ctrl+Z")).clicked() {
+                    let undo = Button::new("Undo").shortcut_text("Ctrl+Z");
+                    if ui.add_enabled(self.history.can_undo(), undo).clicked() {
                         self.history.undo(&mut self.doc);
-                        ui.close_menu();
                     }
-                    if ui.add_enabled(self.history.can_redo(), egui::Button::new("Redo  Ctrl+Y")).clicked() {
+                    let redo = Button::new("Redo").shortcut_text("Ctrl+Y");
+                    if ui.add_enabled(self.history.can_redo(), redo).clicked() {
                         self.history.redo(&mut self.doc);
-                        ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("Copy    Ctrl+C").clicked() { self.copy();             ui.close_menu(); }
-                    if ui.button("Cut     Ctrl+X").clicked() { self.cut();              ui.close_menu(); }
-                    if ui.button("Paste   Ctrl+V").clicked() { self.paste();            ui.close_menu(); }
-                    if ui.button("Delete").clicked()         { self.delete_selection(); ui.close_menu(); }
-                    ui.separator();
-                    if ui.button("Clear Layer").clicked() {
-                        self.doc.active_layer_mut().clear();
-                        self.doc.modified = true;
-                        ui.close_menu();
+                    let has_selection = self.tools.selection.selection.is_some();
+                    if ui.add_enabled(has_selection, Button::new("Copy").shortcut_text("Ctrl+C")).clicked() {
+                        self.copy(&ctx);
                     }
+                    if ui.add_enabled(has_selection, Button::new("Cut").shortcut_text("Ctrl+X")).clicked() {
+                        self.cut(&ctx);
+                    }
+                    if ui.add_enabled(self.clipboard.is_some(), Button::new("Paste").shortcut_text("Ctrl+V")).clicked() {
+                        self.paste(None);
+                    }
+                    if ui.add_enabled(has_selection, Button::new("Delete").shortcut_text("Del")).clicked() {
+                        self.delete_selection();
+                    }
+                    ui.separator();
+                    if ui.button("Clear Layer").clicked() { self.clear_layer(); }
                 });
 
                 ui.menu_button("Canvas", |ui| {
@@ -767,22 +1071,18 @@ impl eframe::App for AsciiArtEditor {
                         self.new_width  = self.doc.width;
                         self.new_height = self.doc.height;
                         self.show_resize_dialog = true;
-                        ui.close_menu();
                     }
                 });
 
                 ui.menu_button("View", |ui| {
-                    if ui.button("Zoom In   Ctrl +").clicked() {
-                        self.canvas_state.zoom = (self.canvas_state.zoom * 1.25).min(6.0);
-                        ui.close_menu();
+                    if ui.add(Button::new("Zoom In").shortcut_text("Ctrl++")).clicked() {
+                        self.canvas_state.zoom_view_center(1.25);
                     }
-                    if ui.button("Zoom Out  Ctrl -").clicked() {
-                        self.canvas_state.zoom = (self.canvas_state.zoom / 1.25).max(0.2);
-                        ui.close_menu();
+                    if ui.add(Button::new("Zoom Out").shortcut_text("Ctrl+-")).clicked() {
+                        self.canvas_state.zoom_view_center(1.0 / 1.25);
                     }
-                    if ui.button("Reset Zoom").clicked() {
+                    if ui.add(Button::new("Reset Zoom").shortcut_text("Ctrl+0")).clicked() {
                         self.canvas_state.zoom = 1.0;
-                        ui.close_menu();
                     }
                     ui.separator();
                     ui.checkbox(&mut self.canvas_state.show_grid, "Show Grid");
@@ -792,19 +1092,17 @@ impl eframe::App for AsciiArtEditor {
                     if ui.button("Keyboard Shortcuts").clicked() {
                         self.about_tab = 0;
                         self.show_about_dialog = true;
-                        ui.close_menu();
                     }
                     if ui.button("Author").clicked() {
                         self.about_tab = 1;
                         self.show_about_dialog = true;
-                        ui.close_menu();
                     }
                 });
             });
         });
 
         // ── Status bar ───────────────────────────────────────────────────────
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+        egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 if let Some((x, y)) = self.canvas_state.cursor_cell {
                     ui.label(format!("({x}, {y})"));
@@ -836,10 +1134,10 @@ impl eframe::App for AsciiArtEditor {
         });
 
         // ── Left toolbar ─────────────────────────────────────────────────────
-        egui::SidePanel::left("toolbar")
+        egui::Panel::left("toolbar")
             .resizable(false)
-            .exact_width(44.0)
-            .show(ctx, |ui| {
+            .exact_size(44.0)
+            .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(4.0);
                     for &tool in ToolType::all() {
@@ -883,65 +1181,39 @@ impl eframe::App for AsciiArtEditor {
             });
 
         // ── Right: layers panel ───────────────────────────────────────────────
-        egui::SidePanel::right("layers")
+        egui::Panel::right("layers")
             .resizable(true)
-            .default_width(220.0)
-            .width_range(160.0..=400.0)
-            .show(ctx, |ui| {
+            .default_size(220.0)
+            .size_range(160.0..=400.0)
+            .show(ui, |ui| {
                 ui.heading("Layers");
                 ui.separator();
 
                 if let Some(action) = self.layer_panel.show(ui, &self.doc) {
-                    match action {
-                        LayerAction::Select(i) => { self.doc.active_layer = i; }
-                        LayerAction::Add       => { self.doc.add_layer(); }
-                        LayerAction::Remove    => { self.doc.remove_layer(); }
-                        LayerAction::Duplicate => { self.doc.duplicate_layer(); }
-                        LayerAction::MergeDown => { self.doc.merge_down(); }
-                        LayerAction::MoveUp => {
-                            let i = self.doc.active_layer;
-                            if i + 1 < self.doc.layers.len() { self.doc.move_layer(i, i + 1); }
-                        }
-                        LayerAction::MoveDown => {
-                            let i = self.doc.active_layer;
-                            if i > 0 { self.doc.move_layer(i, i - 1); }
-                        }
-                        LayerAction::ToggleVisible(i) => { self.doc.layers[i].visible = !self.doc.layers[i].visible; }
-                        LayerAction::ToggleLock(i)    => { self.doc.layers[i].locked  = !self.doc.layers[i].locked; }
-                        LayerAction::Rename(i, name)  => {
-                            if i < self.doc.layers.len() { self.doc.layers[i].name = name; }
-                        }
-                        LayerAction::Reorder(from, to) => {
-                            if from < self.doc.layers.len() && to < self.doc.layers.len() {
-                                self.doc.move_layer(from, to);
-                            }
-                        }
-                    }
+                    self.apply_layer_action(action);
                     ctx.request_repaint();
                 }
             });
 
         // ── Left: inspector panel ─────────────────────────────────────────────
-        egui::SidePanel::left("left_panel")
+        egui::Panel::left("left_panel")
             .resizable(true)
-            .default_width(280.0)
-            .width_range(200.0..=480.0)
-            .show(ctx, |ui| {
+            .default_size(280.0)
+            .size_range(200.0..=480.0)
+            .show(ui, |ui| {
                 ui.heading("Inspector");
-                egui::TopBottomPanel::top("left_tabs_wrapper")
-                    .show_inside(ui, |_| {});
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    egui::collapsing_header::CollapsingHeader::new("🔤 Characters")
+                    egui::CollapsingHeader::new("🔤 Characters")
                         .default_open(true)
                         .show(ui, |ui| {
                             self.char_palette.show(ui, &mut self.primary_char, &mut self.secondary_char);
                         });
-                    egui::collapsing_header::CollapsingHeader::new("🎨 Colors")
+                    egui::CollapsingHeader::new("🎨 Colors")
                         .default_open(true)
                         .show(ui, |ui| {
                             self.color_panel.show(ui);
                         });
-                    egui::collapsing_header::CollapsingHeader::new("⚙ Tool Options")
+                    egui::CollapsingHeader::new("⚙ Tool Options")
                         .default_open(false)
                         .show(ui, |ui| {
                             self.tool_options.show(ui);
@@ -951,10 +1223,10 @@ impl eframe::App for AsciiArtEditor {
 
         // ── Central canvas ───────────────────────────────────────────────────
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(Color32::from_gray(28)))
-            .show(ctx, |ui| {
+            .frame(egui::Frame::NONE.fill(Color32::from_gray(28)))
+            .show(ui, |ui| {
                 let ctx_tool = self.draw_context(true);
-                let event = draw_canvas(
+                let events = draw_canvas(
                     ui,
                     &self.doc,
                     &mut self.canvas_state,
@@ -962,9 +1234,14 @@ impl eframe::App for AsciiArtEditor {
                     self.active_tool,
                     &mut self.tools,
                 );
-                if let Some(ev) = event {
-                    self.handle_canvas_event(ev);
+                for event in events {
+                    self.handle_canvas_event(event);
                 }
             });
+
+        self.update_title(&ctx);
+
+        #[cfg(debug_assertions)]
+        crate::dev::screenshot_hook(&ctx);
     }
 }

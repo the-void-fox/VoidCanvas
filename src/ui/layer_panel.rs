@@ -19,6 +19,7 @@ pub enum LayerAction {
 pub struct LayerPanel {
     pub rename_idx:  Option<usize>,
     pub rename_buf:  String,
+    rename_focus:    bool,
     drag_from:       Option<usize>,
     drag_target:     Option<usize>,
 }
@@ -26,10 +27,11 @@ pub struct LayerPanel {
 impl Default for LayerPanel {
     fn default() -> Self {
         Self {
-            rename_idx:  None,
-            rename_buf:  String::new(),
-            drag_from:   None,
-            drag_target: None,
+            rename_idx:   None,
+            rename_buf:   String::new(),
+            rename_focus: false,
+            drag_from:    None,
+            drag_target:  None,
         }
     }
 }
@@ -38,18 +40,23 @@ impl LayerPanel {
     pub fn show(&mut self, ui: &mut Ui, doc: &Document) -> Option<LayerAction> {
         let mut action = None;
 
+        let (n, active) = (doc.layers.len(), doc.active_layer);
         ui.horizontal_wrapped(|ui| {
-            if ui.button("➕").on_hover_text("Add layer").clicked()      { action = Some(LayerAction::Add);       }
-            if ui.button("➖").on_hover_text("Remove layer").clicked()   { action = Some(LayerAction::Remove);    }
-            if ui.button("\u{f0191}").on_hover_text("Duplicate").clicked()      { action = Some(LayerAction::Duplicate); }
-            if ui.button("⬇M").on_hover_text("Merge down").clicked()    { action = Some(LayerAction::MergeDown); }
-            if ui.button("↑").on_hover_text("Move layer up").clicked()   { action = Some(LayerAction::MoveUp);   }
-            if ui.button("↓").on_hover_text("Move layer down").clicked() { action = Some(LayerAction::MoveDown); }
+            let mut button = |ui: &mut Ui, enabled: bool, icon: &str, hint: &str, act: LayerAction| {
+                if ui.add_enabled(enabled, Button::new(icon)).on_hover_text(hint).clicked() {
+                    action = Some(act);
+                }
+            };
+            button(ui, true,             "➕",        "Add layer",       LayerAction::Add);
+            button(ui, n > 1,            "➖",        "Remove layer",    LayerAction::Remove);
+            button(ui, true,             "\u{f0191}", "Duplicate",       LayerAction::Duplicate);
+            button(ui, active > 0,       "⬇M",       "Merge down",      LayerAction::MergeDown);
+            button(ui, active + 1 < n,   "↑",        "Move layer up",   LayerAction::MoveUp);
+            button(ui, active > 0,       "↓",        "Move layer down", LayerAction::MoveDown);
         });
 
         ui.separator();
 
-        let n = doc.layers.len();
         self.drag_target = None;
 
         egui::ScrollArea::vertical()
@@ -91,7 +98,9 @@ impl LayerPanel {
 
                     ui.painter().rect_filled(row_rect, 4.0, bg);
 
-                    let mut child_ui = ui.child_ui(row_rect, Layout::left_to_right(Align::Center));
+                    let mut child_ui = ui.new_child(
+                        UiBuilder::new().max_rect(row_rect).layout(Layout::left_to_right(Align::Center)),
+                    );
                     child_ui.add_space(6.0);
 
                     let vis_text = if layer.visible { "󰈈" } else { "󰈉" };
@@ -114,7 +123,13 @@ impl LayerPanel {
 
                     if self.rename_idx == Some(layer_idx) {
                         let r = child_ui.text_edit_singleline(&mut self.rename_buf);
-                        if r.lost_focus() || child_ui.input(|i| i.key_pressed(Key::Enter)) {
+                        if self.rename_focus {
+                            r.request_focus();
+                            self.rename_focus = false;
+                        }
+                        if child_ui.input(|i| i.key_pressed(Key::Escape)) {
+                            self.rename_idx = None;
+                        } else if r.lost_focus() || child_ui.input(|i| i.key_pressed(Key::Enter)) {
                             action = Some(LayerAction::Rename(layer_idx, self.rename_buf.clone()));
                             self.rename_idx = None;
                         }
@@ -147,6 +162,7 @@ impl LayerPanel {
                     if row_resp.double_clicked() {
                         self.rename_idx = Some(layer_idx);
                         self.rename_buf = layer.name.clone();
+                        self.rename_focus = true;
                     }
 
                     ui.add_space(2.0);

@@ -5,17 +5,18 @@ use super::{Changes, DrawContext};
 pub struct FillTool;
 
 impl FillTool {
+    /// Fills the 4-connected region of cells that look like the one at (x, y).
     pub fn flood_fill(&self, doc: &mut Document, x: usize, y: usize, ctx: &DrawContext) -> Changes {
-        let layer = &doc.layers[doc.active_layer];
+        let layer = doc.active_layer_mut();
         if layer.locked { return Changes::new(); }
 
-        let target_ch = match layer.get(x, y) {
-            Some(c) => c.ch,
+        let target = match layer.get(x, y) {
+            Some(c) => c.clone(),
             None => return Changes::new(),
         };
 
-        let new_ch = ctx.current_char();
-        if new_ch == target_ch { return Changes::new(); }
+        let new = Cell::new(ctx.current_char(), ctx.current_fg(), ctx.current_bg());
+        if new.same_look(&target) { return Changes::new(); }
 
         let width = layer.width;
         let height = layer.height;
@@ -28,19 +29,13 @@ impl FillTool {
             if cx >= width || cy >= height { continue; }
             let idx = cy * width + cx;
             if visited[idx] { continue; }
-
-            let current_ch = doc.layers[doc.active_layer]
-                .get(cx, cy)
-                .map(|c| c.ch)
-                .unwrap_or(' ');
-
-            if current_ch != target_ch { continue; }
-
             visited[idx] = true;
-            let old = doc.layers[doc.active_layer].get(cx, cy).cloned().unwrap_or_default();
-            let new = Cell::new(new_ch, ctx.current_fg(), ctx.current_bg());
-            doc.active_layer_mut().set(cx, cy, new.clone());
-            changes.insert((cx, cy), (old, new));
+
+            let Some(old) = layer.get(cx, cy).cloned() else { continue };
+            if !old.same_look(&target) { continue; }
+
+            layer.set(cx, cy, new.clone());
+            changes.insert((cx, cy), (old, new.clone()));
 
             if cx + 1 < width  { stack.push((cx + 1, cy)); }
             if cx > 0          { stack.push((cx - 1, cy)); }

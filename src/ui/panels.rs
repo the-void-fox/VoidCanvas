@@ -119,6 +119,7 @@ impl ColorPanel {
                     rect,
                     2.0,
                     Stroke::new(1.0, Color32::from_gray(80)),
+                    StrokeKind::Inside,
                 );
                 resp.clone().on_hover_text(format!("#{r:02X}{g:02X}{b:02X}"));
 
@@ -155,6 +156,7 @@ impl ColorPanel {
             rect,
             2.0,
             Stroke::new(1.0, Color32::from_gray(100)),
+            StrokeKind::Inside,
         );
 
         resp.clicked()
@@ -191,7 +193,7 @@ impl ToolOptionsPanel {
 
         ui.horizontal(|ui| {
             ui.label("Border:");
-            ComboBox::from_id_source("border_style")
+            ComboBox::from_id_salt("border_style")
                 .selected_text(match self.border_style {
                     BorderStyle::Single => "Single ─│",
                     BorderStyle::Double => "Double ═║",

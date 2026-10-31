@@ -1,11 +1,12 @@
 pub mod commands;
 pub use commands::Command;
 
-use crate::document::Document;
+use std::collections::VecDeque;
+use crate::document::{Changes, Document};
 
 pub struct History {
     pub max_size: usize,
-    undo_stack: Vec<Command>,
+    undo_stack: VecDeque<Command>,
     redo_stack: Vec<Command>,
 }
 
@@ -13,21 +14,28 @@ impl History {
     pub fn new(max_size: usize) -> Self {
         Self {
             max_size,
-            undo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
         }
     }
 
+    /// Records a command whose effect is already applied to the document.
     pub fn push(&mut self, cmd: Command) {
-        self.undo_stack.push(cmd);
+        self.undo_stack.push_back(cmd);
         if self.undo_stack.len() > self.max_size {
-            self.undo_stack.remove(0);
+            self.undo_stack.pop_front();
         }
         self.redo_stack.clear();
     }
 
+    /// Applies a command to the document and records it.
+    pub fn execute(&mut self, cmd: Command, doc: &mut Document) {
+        apply_command(&cmd, doc);
+        self.push(cmd);
+    }
+
     pub fn undo(&mut self, doc: &mut Document) -> bool {
-        if let Some(cmd) = self.undo_stack.pop() {
+        if let Some(cmd) = self.undo_stack.pop_back() {
             apply_inverse(&cmd, doc);
             self.redo_stack.push(cmd);
             true
@@ -39,7 +47,7 @@ impl History {
     pub fn redo(&mut self, doc: &mut Document) -> bool {
         if let Some(cmd) = self.redo_stack.pop() {
             apply_command(&cmd, doc);
-            self.undo_stack.push(cmd);
+            self.undo_stack.push_back(cmd);
             true
         } else {
             false
@@ -55,51 +63,76 @@ impl History {
     }
 }
 
+// Undo / redo write through `Layer::put`, so they work on locked layers too.
+fn write_cells(doc: &mut Document, layer_idx: usize, changes: &Changes, new: bool) {
+    if let Some(layer) = doc.layers.get_mut(layer_idx) {
+        for (&(x, y), (old_cell, new_cell)) in changes {
+            layer.put(x, y, if new { new_cell.clone() } else { old_cell.clone() });
+        }
+    }
+}
+
 fn apply_command(cmd: &Command, doc: &mut Document) {
     match cmd {
         Command::Draw { layer_idx, changes } => {
-            if let Some(layer) = doc.layers.get_mut(*layer_idx) {
-                for (&(x, y), (_, new)) in changes {
-                    layer.set(x, y, new.clone());
-                }
-            }
+            write_cells(doc, *layer_idx, changes, true);
         }
-        Command::LayerAdd { index } => {
-            doc.active_layer = *index;
+        Command::LayerAdd { index, layer } => {
+            doc.insert_layer(*index, layer.clone());
         }
         Command::LayerRemove { index, .. } => {
-            doc.layers.remove(*index);
-            if doc.active_layer >= doc.layers.len() {
-                doc.active_layer = doc.layers.len().saturating_sub(1);
-            }
+            doc.take_layer(*index);
         }
         Command::LayerMove { from, to } => {
             doc.move_layer(*from, *to);
         }
+        Command::LayerMergeDown { upper, changes, .. } => {
+            write_cells(doc, upper - 1, changes, true);
+            doc.take_layer(*upper);
+            doc.active_layer = upper - 1;
+        }
+        Command::LayerRename { index, new, .. } => {
+            if let Some(layer) = doc.layers.get_mut(*index) {
+                layer.name = new.clone();
+            }
+        }
+        Command::Resize { new_size, .. } => {
+            doc.resize(new_size.0, new_size.1);
+        }
     }
+    doc.modified = true;
 }
 
 fn apply_inverse(cmd: &Command, doc: &mut Document) {
     match cmd {
         Command::Draw { layer_idx, changes } => {
-            if let Some(layer) = doc.layers.get_mut(*layer_idx) {
-                for (&(x, y), (old, _)) in changes {
-                    layer.set(x, y, old.clone());
-                }
-            }
+            write_cells(doc, *layer_idx, changes, false);
         }
-        Command::LayerAdd { index } => {
-            doc.layers.remove(*index);
-            if doc.active_layer >= doc.layers.len() {
-                doc.active_layer = doc.layers.len().saturating_sub(1);
-            }
+        Command::LayerAdd { index, .. } => {
+            doc.take_layer(*index);
+            doc.active_layer = index.saturating_sub(1).min(doc.layers.len() - 1);
         }
-        Command::LayerRemove { index, layer_snapshot } => {
-            doc.layers.insert(*index, layer_snapshot.clone());
-            doc.active_layer = *index;
+        Command::LayerRemove { index, layer } => {
+            doc.insert_layer(*index, layer.clone());
         }
         Command::LayerMove { from, to } => {
             doc.move_layer(*to, *from);
         }
+        Command::LayerMergeDown { upper, layer, changes } => {
+            write_cells(doc, upper - 1, changes, false);
+            doc.insert_layer(*upper, layer.clone());
+        }
+        Command::LayerRename { index, old, .. } => {
+            if let Some(layer) = doc.layers.get_mut(*index) {
+                layer.name = old.clone();
+            }
+        }
+        Command::Resize { old_size, old_layers, .. } => {
+            doc.layers = old_layers.clone();
+            doc.width = old_size.0;
+            doc.height = old_size.1;
+            doc.active_layer = doc.active_layer.min(doc.layers.len() - 1);
+        }
     }
+    doc.modified = true;
 }

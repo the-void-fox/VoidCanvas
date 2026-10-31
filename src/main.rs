@@ -1,10 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+#[cfg(debug_assertions)]
+mod dev;
 mod document;
 mod history;
 mod tools;
 mod ui;
+
+#[cfg(test)]
+mod tests;
 
 use app::AsciiArtEditor;
 
@@ -31,13 +36,13 @@ fn main() -> eframe::Result<()> {
         "Void Canvas",
         options,
         Box::new(|cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            cc.egui_ctx.set_theme(egui::Theme::Dark);
 
             let mut fonts = egui::FontDefinitions::default();
             let font_bytes = include_bytes!("assets/FiraCode.ttf").to_vec();
             fonts.font_data.insert(
                 "FiraCode".to_owned(),
-                egui::FontData::from_owned(font_bytes).into(),
+                std::sync::Arc::new(egui::FontData::from_owned(font_bytes)),
             );
 
             fonts
@@ -52,9 +57,12 @@ fn main() -> eframe::Result<()> {
                 .insert(0, "FiraCode".to_owned());
 
             cc.egui_ctx.set_fonts(fonts);
-            cc.egui_ctx.set_pixels_per_point(1.2);
+            // Zoom on top of the system DPI scale (set_pixels_per_point would replace it).
+            cc.egui_ctx.set_zoom_factor(1.2);
+            // Ctrl +/-/0 zoom the canvas, not the whole UI.
+            cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
 
-            Box::new(AsciiArtEditor::default())
+            Ok(Box::new(AsciiArtEditor::default()))
         }),
     )
 }
