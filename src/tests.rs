@@ -474,6 +474,30 @@ mod ui {
     }
 
     #[test]
+    fn dropping_a_picture_imports_it_as_a_layer() {
+        let path = std::env::temp_dir().join(format!("void-canvas-test-{}.png", std::process::id()));
+        image::RgbaImage::from_pixel(40, 40, image::Rgba([200, 100, 50, 255])).save(&path).unwrap();
+
+        let mut harness = harness();
+        harness.input_mut().dropped_files.push(egui::DroppedFile { path: Some(path.clone()), ..Default::default() });
+        harness.step();
+        harness.step();
+        harness.step();
+        std::fs::remove_file(&path).unwrap();
+        assert!(harness.state().image_import.is_some(), "the import dialog is open");
+
+        harness.get_by_label("Import as layer").click();
+        harness.step();
+        harness.step();
+        let app = harness.state();
+        assert!(app.image_import.is_none());
+        assert_eq!(app.doc.layers.len(), 2);
+        assert!(app.doc.active_layer().name.starts_with("Image: "));
+        assert_eq!(app.history.labels().0, vec!["Import Image"]);
+        assert_eq!(app.doc.active_layer().get(0, 0).unwrap().ch, '█', "a flat colour becomes full half-block pixels");
+    }
+
+    #[test]
     fn recent_files_are_unique_newest_first_and_capped() {
         let mut settings = crate::app::storage::Settings::default();
         for i in 0..12 {
@@ -622,6 +646,48 @@ mod stage3 {
         apply_stamps(&mut doc, &stamps, &c);
         let at = |x, y| doc.layers[0].get(x, y).unwrap().ch;
         assert_eq!((at(1, 0), at(8, 0), at(1, 3), at(8, 3)), ('/', '\\', '\\', '/'));
+    }
+}
+
+mod image_convert {
+    use image::{Rgba, RgbaImage};
+    use crate::convert::{ConvertMode, ConvertSettings, convert};
+
+    fn settings(mode: ConvertMode, width: usize) -> ConvertSettings {
+        ConvertSettings { width, mode, dither: false, ..ConvertSettings::default() }
+    }
+
+    #[test]
+    fn ascii_follows_brightness() {
+        let img = RgbaImage::from_fn(64, 32, |x, _| { let v = (x * 255 / 63) as u8; Rgba([v, v, v, 255]) });
+        let cells = convert(&img, &settings(ConvertMode::Ascii, 16));
+        assert_eq!((cells[0].len(), cells.len()), (16, 4), "rows keep the 2:1 cell shape");
+        assert!(cells[2][0].is_empty());
+        assert_eq!(cells[2][15].ch, '@');
+    }
+
+    #[test]
+    fn half_blocks_keep_two_colours_per_cell() {
+        let img = RgbaImage::from_fn(2, 2, |_, y| if y == 0 { Rgba([255, 0, 0, 255]) } else { Rgba([0, 0, 255, 255]) });
+        let cell = &convert(&img, &settings(ConvertMode::HalfBlocks, 1))[0][0];
+        assert_eq!((cell.ch, cell.fg.r, cell.bg.b), ('▀', 255, 255));
+    }
+
+    #[test]
+    fn braille_and_transparency() {
+        let white = RgbaImage::from_pixel(4, 8, Rgba([255, 255, 255, 255]));
+        assert!(convert(&white, &settings(ConvertMode::Braille, 2)).iter().flatten().all(|c| c.ch == '⣿'));
+        let clear = RgbaImage::from_pixel(8, 8, Rgba([255, 255, 255, 0]));
+        assert!(convert(&clear, &settings(ConvertMode::Ascii, 4)).iter().flatten().all(|c| c.is_empty()));
+    }
+
+    #[test]
+    fn dithering_keeps_mid_grey_half_lit() {
+        let grey = RgbaImage::from_pixel(80, 160, Rgba([128, 128, 128, 255]));
+        let s = ConvertSettings { dither: true, ..settings(ConvertMode::Braille, 40) };
+        let dots: u32 = convert(&grey, &s).iter().flatten().map(|c| (c.ch as u32).saturating_sub(0x2800).count_ones()).sum();
+        let total = 40 * 40 * 8;
+        assert!((dots as f32 / total as f32 - 0.5).abs() < 0.05, "{dots} of {total} dots lit");
     }
 }
 

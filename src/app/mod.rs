@@ -18,6 +18,7 @@ use crate::tools::{
 mod chrome;
 mod dialogs;
 mod file_io;
+mod import;
 pub(crate) mod storage;
 
 use crate::ui::{
@@ -104,6 +105,8 @@ pub struct AsciiArtEditor {
     settings: storage::Settings,
     /// Unsaved work from a run that crashed, waiting for "Recover?".
     pub(crate) recovery: Option<storage::Autosave>,
+    /// The Import Image dialog, while open.
+    pub(crate) image_import: Option<import::ImageImport>,
     /// History version written by the last autosave.
     autosaved_version: u64,
     last_autosave: f64,
@@ -144,6 +147,7 @@ impl Default for AsciiArtEditor {
             window_title:   String::new(),
             settings:       storage::Settings::default(),
             recovery:       None,
+            image_import:   None,
             autosaved_version: 0,
             last_autosave:  0.0,
         }
@@ -395,7 +399,13 @@ impl AsciiArtEditor {
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
         // Keys typed into a text field (char search, layer rename, …) belong to that field.
-        if ctx.text_edit_focused() || self.pending_action.is_some() || self.recovery.is_some() { return; }
+        if ctx.text_edit_focused()
+            || self.pending_action.is_some()
+            || self.recovery.is_some()
+            || self.image_import.is_some()
+        {
+            return;
+        }
 
         let typing = self.typing();
         if typing {
@@ -712,14 +722,18 @@ impl AsciiArtEditor {
     fn handle_dropped_files(&mut self, ctx: &egui::Context) {
         let dropped = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone()));
         if let Some(path) = dropped {
-            self.request(PendingAction::OpenPath(path), ctx);
+            if import::is_image(&path) {
+                self.start_image_import(&path);
+            } else {
+                self.request(PendingAction::OpenPath(path), ctx);
+            }
         }
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
             let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("drop_overlay")));
             let screen = ctx.content_rect();
             painter.rect_filled(screen, 0.0, Color32::from_black_alpha(190));
             painter.rect_stroke(screen.shrink(16.0), 12.0, Stroke::new(2.0, theme::ACCENT), StrokeKind::Inside);
-            painter.text(screen.center(), Align2::CENTER_CENTER, "Drop a .vc or .txt file to open", theme::semibold(20.0), theme::TEXT);
+            painter.text(screen.center(), Align2::CENTER_CENTER, "Drop a .vc / .txt file to open, or a picture to import", theme::semibold(20.0), theme::TEXT);
         }
     }
 
@@ -811,6 +825,7 @@ impl eframe::App for AsciiArtEditor {
         self.about_dialog(&ctx);
         self.unsaved_changes_modal(&ctx);
         self.recovery_modal(&ctx);
+        self.image_import_dialog(&ctx);
 
         if self.active_tool != ToolType::Text {
             self.tools.text.stop();

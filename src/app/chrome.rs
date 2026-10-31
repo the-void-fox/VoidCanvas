@@ -56,6 +56,8 @@ impl AsciiArtEditor {
                         if ui.add(Button::new("Save").shortcut_text("Ctrl+S")).clicked() { self.save(); }
                         if ui.add(Button::new("Save As…").shortcut_text("Ctrl+Shift+S")).clicked() { self.save_as(); }
                         ui.separator();
+                        if ui.button("Import Image…").clicked() { self.choose_image_to_import(); }
+                        ui.separator();
                         if ui.button("Export Text…").clicked() { self.export_text(); }
                         if ui.button("Export PNG…").clicked() { self.export_png(false); }
                         if ui.button("Export PNG (Transparent)…").clicked() { self.export_png(true); }

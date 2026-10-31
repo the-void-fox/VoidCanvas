@@ -107,6 +107,10 @@ impl AsciiArtEditor {
     /// Loads a `.vc` file (or imports a `.txt` one), replacing the current document.
     /// Problems are reported in the status bar.
     pub fn open_path(&mut self, path: &std::path::Path) {
+        if super::import::is_image(path) {
+            self.start_image_import(path);
+            return;
+        }
         let shown = path.to_string_lossy().to_string();
         let data = match std::fs::read_to_string(path) {
             Ok(data) => data,

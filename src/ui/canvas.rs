@@ -357,7 +357,7 @@ pub fn draw_canvas(
 }
 
 /// One cell: background, then the glyph (procedurally for box / block / braille characters).
-fn draw_cell(painter: &Painter, rect: Rect, ch: char, fg: Color32, bg: Color32, font_id: &FontId, strokes: glyph_render::Strokes) {
+pub(crate) fn draw_cell(painter: &Painter, rect: Rect, ch: char, fg: Color32, bg: Color32, font_id: &FontId, strokes: glyph_render::Strokes) {
     if bg.a() > 0 {
         painter.rect_filled(rect, 0.0, bg);
     }
