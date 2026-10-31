@@ -1,7 +1,7 @@
 use egui::*;
 use crate::document::Color;
 use crate::theme;
-use crate::tools::border::BorderStyle;
+use crate::tools::{Channels, border::BorderStyle};
 use crate::ui::widgets::{color_chip, parse_hex, section_label, to_hex};
 
 /// One of the four colour slots.
@@ -16,9 +16,9 @@ pub enum ColorSlot {
 impl ColorSlot {
     fn describe(self) -> &'static str {
         match self {
-            ColorSlot::PrimaryFg   => "Primary · glyph",
+            ColorSlot::PrimaryFg   => "Primary · foreground",
             ColorSlot::PrimaryBg   => "Primary · background",
-            ColorSlot::SecondaryFg => "Secondary · glyph",
+            ColorSlot::SecondaryFg => "Secondary · foreground",
             ColorSlot::SecondaryBg => "Secondary · background",
         }
     }
@@ -82,7 +82,7 @@ impl ColorPanel {
         section_label(ui, "Slots");
         Grid::new("color_slots").num_columns(3).spacing([10.0, 8.0]).show(ui, |ui| {
             ui.label("");
-            ui.label(RichText::new("Glyph").small().color(theme::TEXT_DIM));
+            ui.label(RichText::new("Fore").small().color(theme::TEXT_DIM));
             ui.label(RichText::new("Back").small().color(theme::TEXT_DIM));
             ui.end_row();
             for (label, fg, bg) in [
@@ -157,6 +157,7 @@ pub struct ToolOptions {
     pub brush_size:    usize,
     pub filled:        bool,
     pub border_style:  BorderStyle,
+    pub channels:      Channels,
 }
 
 impl Default for ToolOptions {
@@ -165,6 +166,7 @@ impl Default for ToolOptions {
             brush_size:   1,
             filled:       false,
             border_style: BorderStyle::Single,
+            channels:     Channels::default(),
         }
     }
 }

@@ -1,5 +1,5 @@
 use crate::document::{Cell, Document};
-use super::{Changes, DrawContext, brush_positions, bresenham};
+use super::{Changes, DrawContext, apply_stamps, brush_positions, bresenham, merge_changes, preview_stamps};
 
 #[derive(Default, Debug)]
 pub struct BrushTool {
@@ -33,32 +33,18 @@ impl BrushTool {
     }
 
     fn draw_at(&mut self, doc: &mut Document, cx: usize, cy: usize, ctx: &DrawContext) -> Changes {
-        let mut changes = Changes::new();
-        let layer = doc.active_layer_mut();
-        let new_cell = Cell::new(ctx.current_char(), ctx.current_fg(), ctx.current_bg());
-
-        for (px, py) in brush_positions(cx, cy, ctx.brush_size) {
-            if px >= layer.width || py >= layer.height { continue; }
-            if !self.accumulated.contains_key(&(px, py)) {
-                if let Some(old) = layer.get(px, py) {
-                    self.accumulated.insert((px, py), (old.clone(), new_cell.clone()));
-                }
-            }
-            layer.set(px, py, new_cell.clone());
-            if let Some(entry) = self.accumulated.get_mut(&(px, py)) {
-                entry.1 = new_cell.clone();
-            }
-            changes.insert((px, py), self.accumulated[&(px, py)].clone());
-        }
+        let stamps = self.stamps(cx, cy, ctx);
+        let changes = apply_stamps(doc, &stamps, ctx);
+        merge_changes(&mut self.accumulated, changes.clone());
         changes
     }
 
+    fn stamps(&self, cx: usize, cy: usize, ctx: &DrawContext) -> Vec<(usize, usize, char)> {
+        let glyph = ctx.current_char();
+        brush_positions(cx, cy, ctx.brush_size).into_iter().map(|(x, y)| (x, y, glyph)).collect()
+    }
+
     pub fn preview(&self, doc: &Document, x: usize, y: usize, ctx: &DrawContext) -> Vec<(usize, usize, Cell)> {
-        let cell = Cell::new(ctx.current_char(), ctx.current_fg(), ctx.current_bg());
-        brush_positions(x, y, ctx.brush_size)
-            .into_iter()
-            .filter(|&(px, py)| px < doc.width && py < doc.height)
-            .map(|(px, py)| (px, py, cell.clone()))
-            .collect()
+        preview_stamps(doc, &self.stamps(x, y, ctx), ctx)
     }
 }

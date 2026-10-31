@@ -1,4 +1,4 @@
-use crate::document::{Cell, Document};
+use crate::document::Document;
 use super::{Changes, DrawContext};
 
 #[derive(Default, Debug)]
@@ -15,8 +15,8 @@ impl FillTool {
             None => return Changes::new(),
         };
 
-        let new = Cell::new(ctx.current_char(), ctx.current_fg(), ctx.current_bg());
-        if new.same_look(&target) { return Changes::new(); }
+        let glyph = ctx.current_char();
+        if ctx.paint(&target, glyph).same_look(&target) { return Changes::new(); }
 
         let width = layer.width;
         let height = layer.height;
@@ -34,8 +34,9 @@ impl FillTool {
             let Some(old) = layer.get(cx, cy).cloned() else { continue };
             if !old.same_look(&target) { continue; }
 
+            let new = ctx.paint(&old, glyph);
             layer.set(cx, cy, new.clone());
-            changes.insert((cx, cy), (old, new.clone()));
+            changes.insert((cx, cy), (old, new));
 
             if cx + 1 < width  { stack.push((cx + 1, cy)); }
             if cx > 0          { stack.push((cx - 1, cy)); }

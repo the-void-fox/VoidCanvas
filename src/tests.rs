@@ -25,6 +25,7 @@ fn ctx(ch: char, fg: Color, bg: Color) -> DrawContext {
         secondary_bg: NONE,
         brush_size: 1,
         is_primary: true,
+        channels: crate::tools::Channels::default(),
     }
 }
 
@@ -262,6 +263,64 @@ mod ui {
     }
 
     #[test]
+    fn alt_click_picks_glyph_and_colours() {
+        let mut harness = harness();
+        harness.state_mut().doc.layers[0].set(4, 3, crate::document::Cell::new(
+            '@', crate::document::Color::new(10, 20, 30, 255), crate::document::Color::TRANSPARENT,
+        ));
+        let pos = cell_pos(&harness, 4, 3);
+        harness.hover_at(pos);
+        harness.step();
+        harness.input_mut().modifiers = Modifiers::ALT;
+        harness.event(button(pos, true));
+        harness.step();
+        harness.event(button(pos, false));
+        harness.step();
+
+        let app = harness.state();
+        assert_eq!(app.primary_char, '@');
+        assert_eq!(app.color_panel.primary_fg, crate::document::Color::new(10, 20, 30, 255));
+        assert_eq!(glyph_at(&harness, 4, 3), '@', "nothing was painted");
+    }
+
+    #[test]
+    fn space_drag_pans_instead_of_painting() {
+        let mut harness = harness();
+        let pos = cell_pos(&harness, 3, 3);
+        let offset = harness.state().canvas_state.offset;
+        harness.hover_at(pos);
+        harness.event(Event::Key { key: egui::Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        harness.step();
+        harness.event(button(pos, true));
+        harness.step();
+        harness.hover_at(pos + egui::vec2(40.0, 30.0));
+        harness.step();
+        harness.event(button(pos + egui::vec2(40.0, 30.0), false));
+        harness.step();
+
+        assert_ne!(harness.state().canvas_state.offset, offset);
+        assert_eq!(glyph_at(&harness, 3, 3), ' ');
+    }
+
+    #[test]
+    fn select_all_and_bracket_keys() {
+        let mut harness = harness();
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+        harness.step();
+        let (w, h) = (harness.state().doc.width, harness.state().doc.height);
+        assert_eq!(harness.state().tools.selection.selection, Some((0, 0, w - 1, h - 1)));
+
+        harness.key_press(egui::Key::CloseBracket);
+        harness.step();
+        harness.key_press(egui::Key::CloseBracket);
+        harness.step();
+        assert_eq!(harness.state().tool_options.brush_size, 3);
+        harness.key_press(egui::Key::OpenBracket);
+        harness.step();
+        assert_eq!(harness.state().tool_options.brush_size, 2);
+    }
+
+    #[test]
     fn dialogs_and_dock_tabs_render() {
         let mut harness = harness();
         harness.state_mut().show_about_dialog = true;
@@ -286,6 +345,65 @@ mod ui {
 
         assert_eq!(harness.state().active_tool, ToolType::Brush);
         assert_eq!(harness.state().char_palette.search, "e");
+    }
+}
+
+mod stage2_tools {
+    use super::{NONE, blue, ctx, glyph, red};
+    use crate::document::{Cell, Document};
+    use crate::history::{Command, History};
+    use crate::tools::{Channels, apply_stamps};
+    use crate::tools::shapes::{Shape, ShapeMods, shape_box};
+
+    const RECT: Shape = Shape::Rect { filled: false };
+
+    #[test]
+    fn shift_makes_a_visually_square_box() {
+        let doc = Document::new(80, 40);
+        let square = ShapeMods { constrain: true, from_center: false };
+        // 10 columns × 2 rows dragged → 10 × 5 cells (cells are twice as tall as wide).
+        assert_eq!(shape_box(RECT, (5, 5), (14, 6), square, &doc), ((5, 5), (14, 9)));
+        // Dragging up-left keeps the direction.
+        assert_eq!(shape_box(RECT, (20, 20), (19, 15), square, &doc), ((20, 20), (9, 15)));
+    }
+
+    #[test]
+    fn alt_draws_from_the_centre_and_shift_straightens_lines() {
+        let doc = Document::new(80, 40);
+        let centre = ShapeMods { constrain: false, from_center: true };
+        assert_eq!(shape_box(RECT, (10, 10), (13, 12), centre, &doc), ((7, 8), (13, 12)));
+        let straight = ShapeMods { constrain: true, from_center: false };
+        assert_eq!(shape_box(Shape::Line, (10, 10), (20, 12), straight, &doc), ((10, 10), (20, 10)));
+        assert_eq!(shape_box(Shape::Line, (10, 10), (13, 22), straight, &doc), ((10, 10), (10, 22)));
+        assert_eq!(shape_box(Shape::Line, (10, 10), (16, 14), straight, &doc), ((10, 10), (15, 15)));
+    }
+
+    #[test]
+    fn channels_limit_what_tools_change() {
+        let old = Cell::new('#', red(), blue());
+        let mut c = ctx('@', Cell::empty().fg, NONE);
+        c.channels = Channels { glyph: false, fg: true, bg: false };
+        let painted = c.paint(&old, '@');
+        assert_eq!((painted.ch, painted.bg), ('#', blue()), "only the foreground changes");
+        assert_eq!(painted.fg, Cell::empty().fg);
+
+        c.channels = Channels { glyph: false, fg: false, bg: true };
+        let erased = c.erase(&old);
+        assert_eq!((erased.ch, erased.fg, erased.bg.a), ('#', red(), 0), "only the background is erased");
+    }
+
+    #[test]
+    fn repeated_cells_in_one_shape_still_undo() {
+        // A one-row rectangle lists each cell twice (top and bottom edge).
+        let mut doc = Document::new(6, 2);
+        doc.layers[0].set(1, 0, glyph('a'));
+        let original = doc.layers.clone();
+        let stamps: Vec<_> = (0..4).flat_map(|x| [(x, 0, '#'), (x, 0, '#')]).collect();
+        let changes = apply_stamps(&mut doc, &stamps, &ctx('#', red(), NONE));
+        let mut history = History::new(5);
+        history.push(Command::Draw { layer_idx: 0, changes });
+        history.undo(&mut doc);
+        assert_eq!(doc.layers, original);
     }
 }
 

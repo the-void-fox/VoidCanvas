@@ -1,31 +1,93 @@
-use crate::document::{Cell, Document};
-use super::{Changes, DrawContext, bresenham};
+//! Line, rectangle, ellipse and border box: drag from one corner to the other.
 
-#[derive(Default, Debug)]
-pub struct RectangleTool {
-    pub start: Option<(usize, usize)>,
-    pub filled: bool,
+use crate::document::{Cell, Document};
+use super::{Changes, DrawContext, apply_stamps, bresenham, border::BorderStyle, preview_stamps};
+
+/// Modifier keys while dragging a shape.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ShapeMods {
+    /// Shift: a visually square box, or a horizontal / vertical / diagonal line.
+    pub constrain: bool,
+    /// Alt: the press point is the centre.
+    pub from_center: bool,
 }
 
-impl RectangleTool {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Shape {
+    Line,
+    Rect { filled: bool },
+    Ellipse { filled: bool },
+    Border(BorderStyle),
+}
+
+#[derive(Default, Debug)]
+pub struct ShapeTool {
+    pub start: Option<(usize, usize)>,
+}
+
+impl ShapeTool {
     pub fn on_press(&mut self, x: usize, y: usize) {
         self.start = Some((x, y));
     }
 
-    pub fn on_release(&mut self, doc: &mut Document, x: usize, y: usize, ctx: &DrawContext) -> Changes {
-        let Some((sx, sy)) = self.start.take() else { return Changes::new(); };
-        let points = rect_points(sx, sy, x, y, self.filled);
-        apply_points(doc, &points, ctx)
+    pub fn preview(&self, doc: &Document, shape: Shape, end: (usize, usize), mods: ShapeMods, ctx: &DrawContext) -> Vec<(usize, usize, Cell)> {
+        let Some(start) = self.start else { return vec![]; };
+        let (a, b) = shape_box(shape, start, end, mods, doc);
+        preview_stamps(doc, &stamps(shape, a, b, ctx.current_char()), ctx)
     }
 
-    pub fn preview(&self, doc: &Document, x: usize, y: usize, ctx: &DrawContext) -> Vec<(usize, usize, Cell)> {
-        let Some((sx, sy)) = self.start else { return vec![]; };
-        let cell = Cell::new(ctx.current_char(), ctx.current_fg(), ctx.current_bg());
-        rect_points(sx, sy, x, y, self.filled)
-            .into_iter()
-            .filter(|&(px, py)| px < doc.width && py < doc.height)
-            .map(|(px, py)| (px, py, cell.clone()))
-            .collect()
+    pub fn on_release(&mut self, doc: &mut Document, shape: Shape, end: (usize, usize), mods: ShapeMods, ctx: &DrawContext) -> Changes {
+        let Some(start) = self.start.take() else { return Changes::new(); };
+        let (a, b) = shape_box(shape, start, end, mods, doc);
+        apply_stamps(doc, &stamps(shape, a, b, ctx.current_char()), ctx)
+    }
+}
+
+/// The two corners (or line ends) after applying the modifiers, inside the document.
+pub fn shape_box(shape: Shape, start: (usize, usize), end: (usize, usize), mods: ShapeMods, doc: &Document) -> ((usize, usize), (usize, usize)) {
+    let sign = |v: isize| if v < 0 { -1 } else { 1 };
+    let (sx, sy) = (start.0 as isize, start.1 as isize);
+    let (mut dx, mut dy) = (end.0 as isize - sx, end.1 as isize - sy);
+
+    if mods.constrain {
+        if shape == Shape::Line {
+            let (ax, ay) = (dx.abs(), dy.abs());
+            if ay * 2 <= ax {
+                dy = 0;
+            } else if ax * 2 <= ay {
+                dx = 0;
+            } else {
+                let d = (ax + ay) / 2;
+                (dx, dy) = (sign(dx) * d, sign(dy) * d);
+            }
+        } else if mods.from_center {
+            // Cells are twice as tall as wide: a square is twice as many columns as rows.
+            let half_h = dy.abs().max((dx.abs() + 1) / 2);
+            (dx, dy) = (sign(dx) * 2 * half_h, sign(dy) * half_h);
+        } else {
+            let h = (dy.abs() + 1).max((dx.abs() + 2) / 2);
+            (dx, dy) = (sign(dx) * (2 * h - 1), sign(dy) * (h - 1));
+        }
+    }
+
+    let (ax, ay) = if mods.from_center { (sx - dx, sy - dy) } else { (sx, sy) };
+    let clamp = |x: isize, y: isize| {
+        (
+            x.clamp(0, doc.width.saturating_sub(1) as isize) as usize,
+            y.clamp(0, doc.height.saturating_sub(1) as isize) as usize,
+        )
+    };
+    (clamp(ax, ay), clamp(sx + dx, sy + dy))
+}
+
+/// Cells of the shape between corners `a` and `b`, with the glyph for each.
+fn stamps(shape: Shape, a: (usize, usize), b: (usize, usize), glyph: char) -> Vec<(usize, usize, char)> {
+    let with_glyph = |points: Vec<(usize, usize)>| points.into_iter().map(|(x, y)| (x, y, glyph)).collect();
+    match shape {
+        Shape::Line => with_glyph(bresenham(a.0 as isize, a.1 as isize, b.0 as isize, b.1 as isize)),
+        Shape::Rect { filled } => with_glyph(rect_points(a.0, a.1, b.0, b.1, filled)),
+        Shape::Ellipse { filled } => with_glyph(ellipse_points(a.0, a.1, b.0, b.1, filled)),
+        Shape::Border(style) => style.frame(a, b),
     }
 }
 
@@ -52,33 +114,6 @@ fn rect_points(x1: usize, y1: usize, x2: usize, y2: usize, filled: bool) -> Vec<
     }
     pts
 }
-
-#[derive(Default, Debug)]
-pub struct EllipseTool {
-    pub start: Option<(usize, usize)>,
-    pub filled: bool,
-}
-
-impl EllipseTool {
-    pub fn on_press(&mut self, x: usize, y: usize) { self.start = Some((x, y)); }
-
-    pub fn on_release(&mut self, doc: &mut Document, x: usize, y: usize, ctx: &DrawContext) -> Changes {
-        let Some((sx, sy)) = self.start.take() else { return Changes::new(); };
-        let points = ellipse_points(sx, sy, x, y, self.filled);
-        apply_points(doc, &points, ctx)
-    }
-
-    pub fn preview(&self, doc: &Document, x: usize, y: usize, ctx: &DrawContext) -> Vec<(usize, usize, Cell)> {
-        let Some((sx, sy)) = self.start else { return vec![]; };
-        let cell = Cell::new(ctx.current_char(), ctx.current_fg(), ctx.current_bg());
-        ellipse_points(sx, sy, x, y, self.filled)
-            .into_iter()
-            .filter(|&(px, py)| px < doc.width && py < doc.height)
-            .map(|(px, py)| (px, py, cell.clone()))
-            .collect()
-    }
-}
-
 /// Cells of the ellipse inscribed in the box (x1, y1)–(x2, y2); it touches all four box edges.
 pub(crate) fn ellipse_points(x1: usize, y1: usize, x2: usize, y2: usize, filled: bool) -> Vec<(usize, usize)> {
     let (min_x, max_x) = (x1.min(x2), x1.max(x2));
@@ -109,44 +144,4 @@ pub(crate) fn ellipse_points(x1: usize, y1: usize, x2: usize, y2: usize, filled:
         }
     }
     pts
-}
-
-#[derive(Default, Debug)]
-pub struct LineTool {
-    pub start: Option<(usize, usize)>,
-}
-
-impl LineTool {
-    pub fn on_press(&mut self, x: usize, y: usize) { self.start = Some((x, y)); }
-
-    pub fn on_release(&mut self, doc: &mut Document, x: usize, y: usize, ctx: &DrawContext) -> Changes {
-        let Some((sx, sy)) = self.start.take() else { return Changes::new(); };
-        let points = bresenham(sx as isize, sy as isize, x as isize, y as isize);
-        let valid: Vec<_> = points.into_iter().filter(|&(px, py)| px < doc.width && py < doc.height).collect();
-        apply_points(doc, &valid, ctx)
-    }
-
-    pub fn preview(&self, doc: &Document, x: usize, y: usize, ctx: &DrawContext) -> Vec<(usize, usize, Cell)> {
-        let Some((sx, sy)) = self.start else { return vec![]; };
-        let cell = Cell::new(ctx.current_char(), ctx.current_fg(), ctx.current_bg());
-        bresenham(sx as isize, sy as isize, x as isize, y as isize)
-            .into_iter()
-            .filter(|&(px, py)| px < doc.width && py < doc.height)
-            .map(|(px, py)| (px, py, cell.clone()))
-            .collect()
-    }
-}
-
-fn apply_points(doc: &mut Document, points: &[(usize, usize)], ctx: &DrawContext) -> Changes {
-    let mut changes = Changes::new();
-    let new_cell = Cell::new(ctx.current_char(), ctx.current_fg(), ctx.current_bg());
-    let layer = doc.active_layer_mut();
-
-    for &(px, py) in points {
-        if px >= layer.width || py >= layer.height { continue; }
-        let old = layer.get(px, py).cloned().unwrap_or_default();
-        layer.set(px, py, new_cell.clone());
-        changes.insert((px, py), (old, new_cell.clone()));
-    }
-    changes
 }

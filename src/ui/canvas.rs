@@ -2,6 +2,7 @@ use egui::*;
 use crate::document::Document;
 use crate::theme;
 use crate::tools::*;
+use crate::tools::shapes::{Shape, ShapeMods};
 use crate::ui::glyph_render;
 
 pub const ZOOM_MIN: f32 = 0.15;
@@ -122,10 +123,15 @@ fn canvas_origin(view: Rect) -> Pos2 {
 }
 
 pub enum CanvasEvent {
-    Press   { x: usize, y: usize, primary: bool },
+    Press   { x: usize, y: usize, primary: bool, mods: Modifiers },
     Drag    { x: usize, y: usize },
     /// Where the pointer was released, clamped to the document.
-    Release { x: usize, y: usize },
+    Release { x: usize, y: usize, mods: Modifiers },
+}
+
+/// Shift constrains a shape, Alt draws it from the centre.
+pub fn shape_mods(mods: Modifiers) -> ShapeMods {
+    ShapeMods { constrain: mods.shift, from_center: mods.alt }
 }
 
 pub fn draw_canvas(
@@ -134,6 +140,8 @@ pub fn draw_canvas(
     state: &mut CanvasState,
     ctx_tool: &DrawContext,
     active_tool: ToolType,
+    shape: Option<Shape>,
+    pan_mode: bool,
     tools: &mut crate::app::ToolState,
 ) -> Vec<CanvasEvent> {
     let available = ui.available_rect_before_wrap();
@@ -199,8 +207,9 @@ pub fn draw_canvas(
         }
     }
 
-    if let Some((cx, cy)) = state.cursor_cell {
-        let preview = get_preview(active_tool, tools, doc, cx, cy, ctx_tool);
+    let mods = ui.input(|i| i.modifiers);
+    if let Some((cx, cy)) = state.cursor_cell.filter(|_| !pan_mode) {
+        let preview = get_preview(active_tool, tools, doc, cx, cy, ctx_tool, shape, mods);
         for (px, py, cell) in &preview {
             let rect = snap(state.cell_rect(*px, *py, origin));
             let bg = Color32::from_rgba_unmultiplied(cell.bg.r, cell.bg.g, cell.bg.b, cell.bg.a / 2);
@@ -225,8 +234,11 @@ pub fn draw_canvas(
     if resp.contains_pointer() {
         let moving = active_tool == ToolType::Select
             && state.cursor_cell.is_some_and(|(x, y)| tools.selection.hit(x, y));
-        ui.ctx().set_cursor_icon(if resp.dragged_by(PointerButton::Middle) {
+        let panning = resp.dragged_by(PointerButton::Middle) || (pan_mode && resp.dragged());
+        ui.ctx().set_cursor_icon(if panning {
             CursorIcon::Grabbing
+        } else if pan_mode {
+            CursorIcon::Grab
         } else if moving {
             CursorIcon::Move
         } else {
@@ -247,17 +259,18 @@ pub fn draw_canvas(
         }
     }
 
-    if resp.dragged_by(PointerButton::Middle) {
+    if resp.dragged_by(PointerButton::Middle) || (pan_mode && resp.dragged_by(PointerButton::Primary)) {
         state.offset += resp.drag_delta();
     }
 
     let in_doc = |&(x, y): &(usize, usize)| x < doc.width && y < doc.height;
 
-    for (button, primary) in [(PointerButton::Primary, true), (PointerButton::Secondary, false)] {
+    let buttons = if pan_mode { &[][..] } else { &[(PointerButton::Primary, true), (PointerButton::Secondary, false)][..] };
+    for &(button, primary) in buttons {
         if resp.drag_started_by(button) {
             let pos = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
             if let Some((x, y)) = pos.and_then(|p| state.screen_to_cell(p, origin)).filter(in_doc) {
-                events.push(CanvasEvent::Press { x, y, primary });
+                events.push(CanvasEvent::Press { x, y, primary, mods });
             }
         } else if resp.hovered()
             && ui.input(|i| i.pointer.button_pressed(button) && i.pointer.button_released(button))
@@ -265,13 +278,14 @@ pub fn draw_canvas(
             // Press and release in the same frame (e.g. touchpad tap): egui reports no drag.
             let pos = ui.input(|i| i.pointer.latest_pos());
             if let Some((x, y)) = pos.and_then(|p| state.screen_to_cell(p, origin)).filter(in_doc) {
-                events.push(CanvasEvent::Press { x, y, primary });
-                events.push(CanvasEvent::Release { x, y });
+                events.push(CanvasEvent::Press { x, y, primary, mods });
+                events.push(CanvasEvent::Release { x, y, mods });
             }
         }
     }
 
     if !resp.drag_started()
+        && !pan_mode
         && (resp.dragged_by(PointerButton::Primary) || resp.dragged_by(PointerButton::Secondary))
         && let Some((x, y)) = resp.interact_pointer_pos().and_then(|p| state.screen_to_cell(p, origin))
     {
@@ -282,7 +296,7 @@ pub fn draw_canvas(
         let pos = ui.input(|i| i.pointer.latest_pos()).or(resp.interact_pointer_pos());
         if let Some(pos) = pos {
             let (x, y) = state.screen_to_cell_clamped(pos, origin, doc);
-            events.push(CanvasEvent::Release { x, y });
+            events.push(CanvasEvent::Release { x, y, mods });
         }
     }
 
@@ -299,20 +313,20 @@ fn draw_cell(painter: &Painter, rect: Rect, ch: char, fg: Color32, bg: Color32, 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn get_preview(
     tool: ToolType,
     tools: &crate::app::ToolState,
     doc: &Document,
     x: usize, y: usize,
     ctx: &DrawContext,
+    shape: Option<Shape>,
+    mods: Modifiers,
 ) -> Vec<(usize, usize, crate::document::Cell)> {
-    match tool {
-        ToolType::Brush     => tools.brush.preview(doc, x, y, ctx),
-        ToolType::Rectangle => tools.rect.preview(doc, x, y, ctx),
-        ToolType::Ellipse   => tools.ellipse.preview(doc, x, y, ctx),
-        ToolType::Line      => tools.line.preview(doc, x, y, ctx),
-        ToolType::Border    => tools.border.preview(doc, x, y, ctx),
-        _                   => vec![],
+    match (tool, shape) {
+        (ToolType::Brush, _) => tools.brush.preview(doc, x, y, ctx),
+        (_, Some(shape)) => tools.shape.preview(doc, shape, (x, y), shape_mods(mods), ctx),
+        _ => vec![],
     }
 }
 

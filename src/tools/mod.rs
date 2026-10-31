@@ -5,13 +5,14 @@ pub mod shapes;
 pub mod border;
 pub mod selection;
 
-use crate::document::Color;
+use crate::document::{Cell, Color, Document};
 use crate::icons;
 pub use crate::document::Changes;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToolType {
     Brush,
+    Eyedropper,
     Eraser,
     Fill,
     Rectangle,
@@ -25,15 +26,26 @@ impl ToolType {
     /// Tools in toolbar order, split into groups.
     pub fn groups() -> &'static [&'static [ToolType]] {
         &[
-            &[ToolType::Brush, ToolType::Eraser, ToolType::Fill],
-            &[ToolType::Line, ToolType::Rectangle, ToolType::Ellipse, ToolType::Border],
             &[ToolType::Select],
+            &[ToolType::Brush, ToolType::Eraser, ToolType::Fill, ToolType::Eyedropper],
+            &[ToolType::Line, ToolType::Rectangle, ToolType::Ellipse, ToolType::Border],
         ]
+    }
+
+    /// Tools that change cells (and take Alt+click as the eyedropper).
+    pub fn draws(&self) -> bool {
+        !matches!(self, ToolType::Select | ToolType::Eyedropper)
+    }
+
+    /// Box shapes and lines, drawn by dragging from corner to corner.
+    pub fn is_shape(&self) -> bool {
+        matches!(self, ToolType::Line | ToolType::Rectangle | ToolType::Ellipse | ToolType::Border)
     }
 
     pub fn icon(&self) -> &'static str {
         match self {
             ToolType::Brush     => icons::BRUSH,
+            ToolType::Eyedropper => icons::EYEDROPPER,
             ToolType::Eraser    => icons::ERASER,
             ToolType::Fill      => icons::FILL,
             ToolType::Rectangle => icons::RECTANGLE,
@@ -48,6 +60,7 @@ impl ToolType {
     pub fn key(&self) -> char {
         match self {
             ToolType::Brush     => 'B',
+            ToolType::Eyedropper => 'I',
             ToolType::Eraser    => 'E',
             ToolType::Fill      => 'F',
             ToolType::Rectangle => 'R',
@@ -61,6 +74,7 @@ impl ToolType {
     pub fn name(&self) -> &'static str {
         match self {
             ToolType::Brush     => "Brush",
+            ToolType::Eyedropper => "Eyedropper",
             ToolType::Eraser    => "Eraser",
             ToolType::Fill      => "Fill",
             ToolType::Rectangle => "Rectangle",
@@ -69,6 +83,20 @@ impl ToolType {
             ToolType::Border    => "Border",
             ToolType::Select    => "Select",
         }
+    }
+}
+
+/// Which parts of a cell the drawing tools change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Channels {
+    pub glyph: bool,
+    pub fg: bool,
+    pub bg: bool,
+}
+
+impl Default for Channels {
+    fn default() -> Self {
+        Self { glyph: true, fg: true, bg: true }
     }
 }
 
@@ -82,6 +110,7 @@ pub struct DrawContext {
     pub secondary_bg: Color,
     pub brush_size: usize,
     pub is_primary: bool,
+    pub channels: Channels,
 }
 
 impl DrawContext {
@@ -94,6 +123,47 @@ impl DrawContext {
     pub fn current_bg(&self) -> Color {
         if self.is_primary { self.primary_bg.clone() } else { self.secondary_bg.clone() }
     }
+
+    /// `old` with the enabled channels replaced: glyph `ch` and the slot's colours.
+    pub fn paint(&self, old: &Cell, ch: char) -> Cell {
+        Cell {
+            ch: if self.channels.glyph { ch } else { old.ch },
+            fg: if self.channels.fg { self.current_fg() } else { old.fg.clone() },
+            bg: if self.channels.bg { self.current_bg() } else { old.bg.clone() },
+        }
+    }
+
+    /// `old` with the enabled channels cleared.
+    pub fn erase(&self, old: &Cell) -> Cell {
+        let blank = Cell::empty();
+        Cell {
+            ch: if self.channels.glyph { blank.ch } else { old.ch },
+            fg: if self.channels.fg { blank.fg } else { old.fg.clone() },
+            bg: if self.channels.bg { blank.bg } else { old.bg.clone() },
+        }
+    }
+}
+
+/// Paints glyphs at cells of the active layer (through [`DrawContext::paint`]), recording changes.
+pub fn apply_stamps(doc: &mut Document, stamps: &[(usize, usize, char)], ctx: &DrawContext) -> Changes {
+    let mut changes = Changes::new();
+    let layer = doc.active_layer_mut();
+    for &(x, y, ch) in stamps {
+        let Some(old) = layer.get(x, y).cloned() else { continue };
+        let new = ctx.paint(&old, ch);
+        layer.set(x, y, new.clone());
+        merge_changes(&mut changes, Changes::from([((x, y), (old, new))]));
+    }
+    changes
+}
+
+/// What [`apply_stamps`] would produce, for previews.
+pub fn preview_stamps(doc: &Document, stamps: &[(usize, usize, char)], ctx: &DrawContext) -> Vec<(usize, usize, Cell)> {
+    let layer = doc.active_layer();
+    stamps
+        .iter()
+        .filter_map(|&(x, y, ch)| layer.get(x, y).map(|old| (x, y, ctx.paint(old, ch))))
+        .collect()
 }
 
 /// Folds `more` into `into`, keeping the earliest "before" and the latest "after" of each cell.

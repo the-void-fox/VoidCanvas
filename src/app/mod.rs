@@ -8,8 +8,7 @@ use crate::tools::{
     brush::BrushTool,
     eraser::EraserTool,
     fill::FillTool,
-    shapes::{RectangleTool, EllipseTool, LineTool},
-    border::BorderTool,
+    shapes::{Shape, ShapeTool},
     selection::{SelectionTool, content_to_text, text_to_content},
 };
 mod chrome;
@@ -17,7 +16,7 @@ mod dialogs;
 mod file_io;
 
 use crate::ui::{
-    canvas::{CanvasEvent, CanvasState, draw_canvas},
+    canvas::{CanvasEvent, CanvasState, draw_canvas, shape_mods},
     char_palette::CharPalette,
     layer_panel::{LayerAction, LayerPanel},
     panels::{ColorPanel, ToolOptions},
@@ -30,10 +29,7 @@ pub struct ToolState {
     pub brush:     BrushTool,
     pub eraser:    EraserTool,
     pub fill:      FillTool,
-    pub rect:      RectangleTool,
-    pub ellipse:   EllipseTool,
-    pub line:      LineTool,
-    pub border:    BorderTool,
+    pub shape:     ShapeTool,
     pub selection: SelectionTool,
 }
 
@@ -43,10 +39,7 @@ impl Default for ToolState {
             brush:     BrushTool::default(),
             eraser:    EraserTool::default(),
             fill:      FillTool::default(),
-            rect:      RectangleTool::default(),
-            ellipse:   EllipseTool::default(),
-            line:      LineTool::default(),
-            border:    BorderTool::default(),
+            shape:     ShapeTool::default(),
             selection: SelectionTool::default(),
         }
     }
@@ -158,6 +151,7 @@ impl AsciiArtEditor {
             secondary_bg:   self.color_panel.secondary_bg.clone(),
             brush_size:     self.tool_options.brush_size,
             is_primary,
+            channels:       self.tool_options.channels,
         }
     }
 
@@ -179,13 +173,21 @@ impl AsciiArtEditor {
 
     fn handle_canvas_event(&mut self, event: CanvasEvent) {
         match event {
-            CanvasEvent::Press { x, y, primary } => {
+            CanvasEvent::Press { x, y, primary, mods } => {
                 if self.drawing { return; }
                 let tool = self.active_tool;
+                self.last_primary = primary;
+
+                // Alt+click with a drawing tool samples like the eyedropper (and keeps sampling while dragged).
+                if tool == ToolType::Eyedropper || (mods.alt && tool.draws()) {
+                    self.pick(x, y, primary);
+                    self.drawing = true;
+                    self.stroke_tool = ToolType::Eyedropper;
+                    return;
+                }
+
                 let edits = tool != ToolType::Select || self.tools.selection.hit(x, y);
                 if edits && self.active_layer_locked() { return; }
-
-                self.sync_tool_options();
                 let ctx = self.draw_context(primary);
 
                 if tool == ToolType::Fill {
@@ -196,18 +198,14 @@ impl AsciiArtEditor {
 
                 self.drawing = true;
                 self.stroke_tool = tool;
-                self.last_primary = primary;
                 self.stroke_changes.clear();
 
                 match tool {
-                    ToolType::Brush     => { self.tools.brush.on_press(&mut self.doc, x, y, &ctx); }
-                    ToolType::Eraser    => { self.tools.eraser.on_press(&mut self.doc, x, y, &ctx); }
-                    ToolType::Rectangle => self.tools.rect.on_press(x, y),
-                    ToolType::Ellipse   => self.tools.ellipse.on_press(x, y),
-                    ToolType::Line      => self.tools.line.on_press(x, y),
-                    ToolType::Border    => self.tools.border.on_press(x, y),
-                    ToolType::Select    => { self.tools.selection.on_press(&self.doc, x, y); }
-                    ToolType::Fill      => {}
+                    ToolType::Brush  => { self.tools.brush.on_press(&mut self.doc, x, y, &ctx); }
+                    ToolType::Eraser => { self.tools.eraser.on_press(&mut self.doc, x, y, &ctx); }
+                    ToolType::Select => { self.tools.selection.on_press(&self.doc, x, y); }
+                    t if t.is_shape() => self.tools.shape.on_press(x, y),
+                    _ => {}
                 }
             }
 
@@ -217,6 +215,7 @@ impl AsciiArtEditor {
                 match self.stroke_tool {
                     ToolType::Brush  => { self.tools.brush.on_drag(&mut self.doc, x, y, &ctx); }
                     ToolType::Eraser => { self.tools.eraser.on_drag(&mut self.doc, x, y, &ctx); }
+                    ToolType::Eyedropper => self.pick(x, y, self.last_primary),
                     ToolType::Select => {
                         let changes = self.tools.selection.on_drag(&mut self.doc, x, y);
                         merge_changes(&mut self.stroke_changes, changes);
@@ -225,20 +224,19 @@ impl AsciiArtEditor {
                 }
             }
 
-            CanvasEvent::Release { x, y } => {
+            CanvasEvent::Release { x, y, mods } => {
                 if !self.drawing { return; }
                 self.drawing = false;
 
                 let ctx = self.draw_context(self.last_primary);
                 let changes = match self.stroke_tool {
-                    ToolType::Brush     => self.tools.brush.on_release(),
-                    ToolType::Eraser    => self.tools.eraser.on_release(),
-                    ToolType::Rectangle => self.tools.rect.on_release(&mut self.doc, x, y, &ctx),
-                    ToolType::Ellipse   => self.tools.ellipse.on_release(&mut self.doc, x, y, &ctx),
-                    ToolType::Line      => self.tools.line.on_release(&mut self.doc, x, y, &ctx),
-                    ToolType::Border    => self.tools.border.on_release(&mut self.doc, x, y, &ctx),
-                    ToolType::Select    => self.tools.selection.on_release(&mut self.doc),
-                    ToolType::Fill      => Changes::new(),
+                    ToolType::Brush  => self.tools.brush.on_release(),
+                    ToolType::Eraser => self.tools.eraser.on_release(),
+                    ToolType::Select => self.tools.selection.on_release(&mut self.doc),
+                    tool => match self.shape_for(tool) {
+                        Some(shape) => self.tools.shape.on_release(&mut self.doc, shape, (x, y), shape_mods(mods), &ctx),
+                        None => Changes::new(),
+                    },
                 };
 
                 let mut all = std::mem::take(&mut self.stroke_changes);
@@ -248,16 +246,38 @@ impl AsciiArtEditor {
         }
     }
 
+    /// The shape a shape tool draws with the current options.
+    fn shape_for(&self, tool: ToolType) -> Option<Shape> {
+        let options = &self.tool_options;
+        Some(match tool {
+            ToolType::Line      => Shape::Line,
+            ToolType::Rectangle => Shape::Rect { filled: options.filled },
+            ToolType::Ellipse   => Shape::Ellipse { filled: options.filled },
+            ToolType::Border    => Shape::Border(options.border_style),
+            _ => return None,
+        })
+    }
+
+    /// Eyedropper: copies the enabled channels of the visible cell into a slot.
+    fn pick(&mut self, x: usize, y: usize, primary: bool) {
+        if x >= self.doc.width || y >= self.doc.height { return; }
+        let cell = self.doc.composite_cell(x, y);
+        let channels = self.tool_options.channels;
+        let panel = &mut self.color_panel;
+        let (glyph, fg, bg) = if primary {
+            (&mut self.primary_char, &mut panel.primary_fg, &mut panel.primary_bg)
+        } else {
+            (&mut self.secondary_char, &mut panel.secondary_fg, &mut panel.secondary_bg)
+        };
+        if channels.glyph { *glyph = cell.ch; }
+        if channels.fg { *fg = cell.fg; }
+        if channels.bg { *bg = cell.bg; }
+    }
+
     /// Swaps the primary and secondary glyph and colours.
     fn swap_slots(&mut self) {
         std::mem::swap(&mut self.primary_char, &mut self.secondary_char);
         self.color_panel.swap();
-    }
-
-    fn sync_tool_options(&mut self) {
-        self.tools.rect.filled    = self.tool_options.filled;
-        self.tools.ellipse.filled = self.tool_options.filled;
-        self.tools.border.style   = self.tool_options.border_style;
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
@@ -284,6 +304,13 @@ impl AsciiArtEditor {
         let cmd = Modifiers::COMMAND;
         let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         // Most specific shortcuts first: consume_key ignores extra Shift.
+        let (select_all, deselect_all) = ctx.input_mut(|i| (i.consume_key(cmd, Key::A), i.consume_key(cmd, Key::D)));
+        if select_all && !self.drawing {
+            self.tools.selection.clear();
+            self.tools.selection.selection = Some((0, 0, self.doc.width - 1, self.doc.height - 1));
+        }
+        if deselect_all && !self.drawing { self.tools.selection.selection = None; }
+
         let (save_as, save, open, new, redo, undo, zoom_in, zoom_out, fit, actual) = ctx.input_mut(|i| (
             i.consume_key(cmd_shift, Key::S),
             i.consume_key(cmd, Key::S),
@@ -309,24 +336,19 @@ impl AsciiArtEditor {
         if fit { self.canvas_state.request_fit(); }
         if actual { self.canvas_state.actual_size(); }
 
-        let tool_keys = [
-            (Key::B, ToolType::Brush),
-            (Key::E, ToolType::Eraser),
-            (Key::F, ToolType::Fill),
-            (Key::R, ToolType::Rectangle),
-            (Key::O, ToolType::Ellipse),
-            (Key::L, ToolType::Line),
-            (Key::D, ToolType::Border),
-            (Key::S, ToolType::Select),
-        ];
+        let tool_keys: Vec<(Key, ToolType)> = ToolType::groups()
+            .iter()
+            .flat_map(|group| group.iter())
+            .filter_map(|&t| Some((Key::from_name(&t.key().to_string())?, t)))
+            .collect();
         let (tool, bigger, smaller, swap, delete, deselect) = ctx.input(|i| {
             if i.modifiers.command || i.modifiers.alt {
                 return (None, false, false, false, false, false);
             }
             (
                 tool_keys.iter().find(|(key, _)| i.key_pressed(*key)).map(|&(_, t)| t),
-                i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals),
-                i.key_pressed(Key::Minus),
+                i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals) || i.key_pressed(Key::CloseBracket),
+                i.key_pressed(Key::Minus) || i.key_pressed(Key::OpenBracket),
                 i.key_pressed(Key::X),
                 i.key_pressed(Key::Delete),
                 i.key_pressed(Key::Escape),
@@ -581,8 +603,6 @@ impl eframe::App for AsciiArtEditor {
         self.about_dialog(&ctx);
         self.unsaved_changes_modal(&ctx);
 
-        self.sync_tool_options();
-
         // Order matters: panels claim space from the outside in, the canvas gets the rest.
         self.menu_bar(ui);
         self.options_bar(ui);
@@ -594,12 +614,19 @@ impl eframe::App for AsciiArtEditor {
             .frame(egui::Frame::NONE.fill(theme::BG_DEEP))
             .show(ui, |ui| {
                 let ctx_tool = self.draw_context(true);
+                let shape = self.shape_for(self.active_tool);
+                // Space + drag pans, like in Photoshop.
+                let pan_mode = !self.drawing
+                    && !ctx.text_edit_focused()
+                    && ctx.input(|i| i.key_down(Key::Space));
                 let events = draw_canvas(
                     ui,
                     &self.doc,
                     &mut self.canvas_state,
                     &ctx_tool,
                     self.active_tool,
+                    shape,
+                    pan_mode,
                     &mut self.tools,
                 );
                 for event in events {

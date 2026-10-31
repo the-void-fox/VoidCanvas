@@ -8,6 +8,7 @@ pub const RECTANGLE: &str = "\u{F0E5F}";
 pub const ELLIPSE: &str = "\u{F0EA1}";
 pub const BORDER: &str = "\u{F00CE}";
 pub const SELECT: &str = "\u{F0489}";
+pub const EYEDROPPER: &str = "\u{F020A}";
 
 pub const EYE: &str = "\u{F0208}";
 pub const EYE_OFF: &str = "\u{F0209}";

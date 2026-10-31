@@ -149,8 +149,9 @@ impl AsciiArtEditor {
                                 ui.selectable_value(&mut options.border_style, style, label);
                             }
                         }
-                        ToolType::Line => hint(ui, "Drag to draw a line"),
-                        ToolType::Fill => hint(ui, "Click to fill connected cells that look the same"),
+                        ToolType::Line => {}
+                        ToolType::Fill => hint(ui, "Fills connected cells that look the same"),
+                        ToolType::Eyedropper => hint(ui, "Click: pick into primary · right click: secondary · Alt+click works with any drawing tool"),
                         ToolType::Select => {
                             if let Some((x1, y1, x2, y2)) = self.tools.selection.selection {
                                 let info = format!("{}×{} at {x1}, {y1}", x2 - x1 + 1, y2 - y1 + 1);
@@ -160,9 +161,31 @@ impl AsciiArtEditor {
                             hint(ui, "Drag to select · drag inside to move · Del clears");
                         }
                     }
-                    if matches!(tool, ToolType::Brush | ToolType::Eraser | ToolType::Rectangle | ToolType::Ellipse | ToolType::Border) {
+                    if tool.draws() || tool == ToolType::Eyedropper {
+                        if tool != ToolType::Line {
+                            vdivider(ui);
+                        }
+                        let channels = &mut self.tool_options.channels;
+                        let verb = match tool {
+                            ToolType::Eraser => "Erase",
+                            ToolType::Eyedropper => "Pick",
+                            _ => "Paint",
+                        };
+                        ui.label(verb);
+                        for (on, label, what) in [
+                            (&mut channels.glyph, "Glyph", "the character"),
+                            (&mut channels.fg, "Fore", "the foreground colour"),
+                            (&mut channels.bg, "Back", "the background colour"),
+                        ] {
+                            ui.toggle_value(on, label).on_hover_text(format!("{verb} {what}"));
+                        }
+                    }
+                    if tool.is_shape() {
                         vdivider(ui);
-                        hint(ui, "Right button draws with the secondary slot");
+                        hint(ui, "Shift: square / straight · Alt: from centre");
+                    } else if matches!(tool, ToolType::Brush | ToolType::Eraser | ToolType::Fill) {
+                        vdivider(ui);
+                        hint(ui, "Right button: secondary slot · Alt+click: pick");
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
