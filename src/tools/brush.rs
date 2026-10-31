@@ -33,18 +33,19 @@ impl BrushTool {
     }
 
     fn draw_at(&mut self, doc: &mut Document, cx: usize, cy: usize, ctx: &DrawContext) -> Changes {
-        let stamps = self.stamps(cx, cy, ctx);
+        let stamps = self.stamps(doc, cx, cy, ctx);
         let changes = apply_stamps(doc, &stamps, ctx);
         merge_changes(&mut self.accumulated, changes.clone());
         changes
     }
 
-    fn stamps(&self, cx: usize, cy: usize, ctx: &DrawContext) -> Vec<(usize, usize, char)> {
+    fn stamps(&self, doc: &Document, cx: usize, cy: usize, ctx: &DrawContext) -> Vec<(usize, usize, char)> {
         let glyph = ctx.current_char();
-        brush_positions(cx, cy, ctx.brush_size).into_iter().map(|(x, y)| (x, y, glyph)).collect()
+        let stamps = brush_positions(cx, cy, ctx.brush_size).into_iter().map(|(x, y)| (x, y, glyph)).collect();
+        ctx.mirror.stamps(stamps, doc.width, doc.height)
     }
 
     pub fn preview(&self, doc: &Document, x: usize, y: usize, ctx: &DrawContext) -> Vec<(usize, usize, Cell)> {
-        preview_stamps(doc, &self.stamps(x, y, ctx), ctx)
+        preview_stamps(doc, &self.stamps(doc, x, y, ctx), ctx)
     }
 }

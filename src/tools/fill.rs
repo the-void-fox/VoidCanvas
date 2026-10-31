@@ -1,12 +1,21 @@
 use crate::document::Document;
-use super::{Changes, DrawContext};
+use super::{Changes, DrawContext, merge_changes};
 
 #[derive(Default, Debug)]
 pub struct FillTool;
 
 impl FillTool {
-    /// Fills the 4-connected region of cells that look like the one at (x, y).
+    /// Fills the region at (x, y) and, with symmetry on, at its mirror images.
     pub fn flood_fill(&self, doc: &mut Document, x: usize, y: usize, ctx: &DrawContext) -> Changes {
+        let mut changes = Changes::new();
+        for (sx, sy) in ctx.mirror.points(x, y, doc.width, doc.height) {
+            merge_changes(&mut changes, self.fill_from(doc, sx, sy, ctx));
+        }
+        changes
+    }
+
+    /// Fills the 4-connected region of cells that look like the one at (x, y).
+    fn fill_from(&self, doc: &mut Document, x: usize, y: usize, ctx: &DrawContext) -> Changes {
         let layer = doc.active_layer_mut();
         if layer.locked { return Changes::new(); }
 

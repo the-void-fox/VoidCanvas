@@ -33,13 +33,15 @@ impl ShapeTool {
     pub fn preview(&self, doc: &Document, shape: Shape, end: (usize, usize), mods: ShapeMods, ctx: &DrawContext) -> Vec<(usize, usize, Cell)> {
         let Some(start) = self.start else { return vec![]; };
         let (a, b) = shape_box(shape, start, end, mods, doc);
-        preview_stamps(doc, &stamps(shape, a, b, ctx.current_char()), ctx)
+        let stamps = ctx.mirror.stamps(stamps(shape, a, b, ctx.current_char()), doc.width, doc.height);
+        preview_stamps(doc, &stamps, ctx)
     }
 
     pub fn on_release(&mut self, doc: &mut Document, shape: Shape, end: (usize, usize), mods: ShapeMods, ctx: &DrawContext) -> Changes {
         let Some(start) = self.start.take() else { return Changes::new(); };
         let (a, b) = shape_box(shape, start, end, mods, doc);
-        apply_stamps(doc, &stamps(shape, a, b, ctx.current_char()), ctx)
+        let stamps = ctx.mirror.stamps(stamps(shape, a, b, ctx.current_char()), doc.width, doc.height);
+        apply_stamps(doc, &stamps, ctx)
     }
 }
 

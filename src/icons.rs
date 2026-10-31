@@ -8,6 +8,8 @@ pub const RECTANGLE: &str = "\u{F0E5F}";
 pub const ELLIPSE: &str = "\u{F0EA1}";
 pub const BORDER: &str = "\u{F00CE}";
 pub const SELECT: &str = "\u{F0489}";
+/// A quadrant block reads as "pixels".
+pub const PIXEL: &str = "▚";
 pub const EYEDROPPER: &str = "\u{F020A}";
 pub const TEXT: &str = "\u{F0284}";
 pub const FLIP_H: &str = "\u{F10E7}";

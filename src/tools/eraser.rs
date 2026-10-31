@@ -34,8 +34,13 @@ impl EraserTool {
 
     fn erase_at(&mut self, doc: &mut Document, cx: usize, cy: usize, ctx: &DrawContext) -> Changes {
         let mut changes = Changes::new();
+        let (w, h) = (doc.width, doc.height);
         let layer = doc.active_layer_mut();
-        for (px, py) in brush_positions(cx, cy, ctx.brush_size) {
+        let positions = brush_positions(cx, cy, ctx.brush_size)
+            .into_iter()
+            .filter(|&(x, y)| x < w && y < h)
+            .flat_map(|(x, y)| ctx.mirror.points(x, y, w, h));
+        for (px, py) in positions {
             let Some(old) = layer.get(px, py).cloned() else { continue };
             let new = ctx.erase(&old);
             layer.set(px, py, new.clone());

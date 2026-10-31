@@ -20,6 +20,8 @@ pub struct CanvasState {
     pub offset: Vec2,
     pub show_grid: bool,
     pub cursor_cell: Option<(usize, usize)>,
+    /// The pointer is in the bottom half of `cursor_cell`.
+    pub cursor_lower: bool,
     pub march_phase: f32,
     /// Screen area of the canvas view in the last frame.
     pub view_rect: Rect,
@@ -34,6 +36,7 @@ impl Default for CanvasState {
             offset: Vec2::ZERO,
             show_grid: true,
             cursor_cell: None,
+            cursor_lower: false,
             march_phase: 0.0,
             view_rect: Rect::NOTHING,
             fit_pending: true,
@@ -68,6 +71,12 @@ impl CanvasState {
             (rel.x / cs.x).floor().clamp(0.0, max_x) as usize,
             (rel.y / cs.y).floor().clamp(0.0, max_y) as usize,
         )
+    }
+
+    /// Is `pos` in the bottom half of its cell?
+    pub fn in_lower_half(&self, pos: Pos2, canvas_origin: Pos2) -> bool {
+        let rel = (pos - canvas_origin - self.offset).y / self.cell_size().y;
+        rel - rel.floor() >= 0.5
     }
 
     pub fn cell_rect(&self, x: usize, y: usize, canvas_origin: Pos2) -> Rect {
@@ -123,8 +132,9 @@ fn canvas_origin(view: Rect) -> Pos2 {
 }
 
 pub enum CanvasEvent {
-    Press   { x: usize, y: usize, primary: bool, mods: Modifiers },
-    Drag    { x: usize, y: usize },
+    /// `lower`: the pointer is in the bottom half of the cell (half-block pixels).
+    Press   { x: usize, y: usize, primary: bool, mods: Modifiers, lower: bool },
+    Drag    { x: usize, y: usize, lower: bool },
     /// Where the pointer was released, clamped to the document.
     Release { x: usize, y: usize, mods: Modifiers },
 }
@@ -165,6 +175,7 @@ pub fn draw_canvas(
     } else {
         None
     };
+    state.cursor_lower = hover_pos.is_some_and(|p| state.in_lower_half(p, origin));
 
     let cs = state.cell_size();
     let canvas_rect = Rect::from_min_size(
@@ -210,7 +221,7 @@ pub fn draw_canvas(
 
     let mods = ui.input(|i| i.modifiers);
     if let Some((cx, cy)) = state.cursor_cell.filter(|_| !pan_mode) {
-        let preview = get_preview(active_tool, tools, doc, cx, cy, ctx_tool, shape, mods);
+        let preview = get_preview(active_tool, tools, doc, (cx, cy, state.cursor_lower), ctx_tool, shape, mods);
         for (px, py, cell) in &preview {
             // Show the result as it will look, with the other layers.
             let cell = doc.composite_with(*px, *py, cell);
@@ -229,6 +240,16 @@ pub fn draw_canvas(
     {
         let rect = snap(state.cell_rect(cx, cy, origin));
         painter.rect_stroke(rect, 0.0, Stroke::new(1.0, theme::ACCENT), StrokeKind::Inside);
+    }
+
+    // Symmetry axes through the middle of the canvas.
+    let axis = theme::ACCENT.gamma_multiply(0.7);
+    let center = snap(canvas_rect).center();
+    if ctx_tool.mirror.x {
+        draw_dashed_line(&painter, pos2(center.x, canvas_rect.min.y), pos2(center.x, canvas_rect.max.y), axis);
+    }
+    if ctx_tool.mirror.y {
+        draw_dashed_line(&painter, pos2(canvas_rect.min.x, center.y), pos2(canvas_rect.max.x, center.y), axis);
     }
 
     draw_selection(tools, state, &painter, origin, ppp);
@@ -287,16 +308,22 @@ pub fn draw_canvas(
     for &(button, primary) in buttons {
         if resp.drag_started_by(button) {
             let pos = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
-            if let Some((x, y)) = pos.and_then(|p| state.screen_to_cell(p, origin)).filter(in_doc) {
-                events.push(CanvasEvent::Press { x, y, primary, mods });
+            if let Some(p) = pos
+                && let Some((x, y)) = state.screen_to_cell(p, origin).filter(in_doc)
+            {
+                let lower = state.in_lower_half(p, origin);
+                events.push(CanvasEvent::Press { x, y, primary, mods, lower });
             }
         } else if resp.hovered()
             && ui.input(|i| i.pointer.button_pressed(button) && i.pointer.button_released(button))
         {
             // Press and release in the same frame (e.g. touchpad tap): egui reports no drag.
             let pos = ui.input(|i| i.pointer.latest_pos());
-            if let Some((x, y)) = pos.and_then(|p| state.screen_to_cell(p, origin)).filter(in_doc) {
-                events.push(CanvasEvent::Press { x, y, primary, mods });
+            if let Some(p) = pos
+                && let Some((x, y)) = state.screen_to_cell(p, origin).filter(in_doc)
+            {
+                let lower = state.in_lower_half(p, origin);
+                events.push(CanvasEvent::Press { x, y, primary, mods, lower });
                 events.push(CanvasEvent::Release { x, y, mods });
             }
         }
@@ -305,9 +332,10 @@ pub fn draw_canvas(
     if !resp.drag_started()
         && !pan_mode
         && (resp.dragged_by(PointerButton::Primary) || resp.dragged_by(PointerButton::Secondary))
-        && let Some((x, y)) = resp.interact_pointer_pos().and_then(|p| state.screen_to_cell(p, origin))
+        && let Some(p) = resp.interact_pointer_pos()
+        && let Some((x, y)) = state.screen_to_cell(p, origin)
     {
-        events.push(CanvasEvent::Drag { x, y });
+        events.push(CanvasEvent::Drag { x, y, lower: state.in_lower_half(p, origin) });
     }
 
     if resp.drag_stopped() {
@@ -331,18 +359,18 @@ fn draw_cell(painter: &Painter, rect: Rect, ch: char, fg: Color32, bg: Color32, 
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn get_preview(
     tool: ToolType,
     tools: &crate::app::ToolState,
     doc: &Document,
-    x: usize, y: usize,
+    (x, y, lower): (usize, usize, bool),
     ctx: &DrawContext,
     shape: Option<Shape>,
     mods: Modifiers,
 ) -> Vec<(usize, usize, crate::document::Cell)> {
     match (tool, shape) {
         (ToolType::Brush, _) => tools.brush.preview(doc, x, y, ctx),
+        (ToolType::Pixel, _) => tools.pixel.preview(doc, x, y * 2 + lower as usize, ctx),
         (_, Some(shape)) => tools.shape.preview(doc, shape, (x, y), shape_mods(mods), ctx),
         _ => vec![],
     }
@@ -392,6 +420,18 @@ fn draw_selection(
     let (dash, gap) = (6.0_f32, 4.0_f32);
     let offset = state.march_phase * 4.0 * (dash + gap);
     draw_dashed_rect(painter, sel_rect.shrink(0.5), Color32::WHITE, offset, dash, gap);
+}
+
+fn draw_dashed_line(painter: &egui::Painter, a: Pos2, b: Pos2, color: Color32) {
+    let (dash, gap) = (8.0, 5.0);
+    let len = a.distance(b);
+    let dir = (b - a) / len.max(0.001);
+    let mut pos = 0.0;
+    while pos < len {
+        let end = (pos + dash).min(len);
+        painter.line_segment([a + dir * pos, a + dir * end], Stroke::new(1.0, color));
+        pos += dash + gap;
+    }
 }
 
 fn draw_dashed_rect(

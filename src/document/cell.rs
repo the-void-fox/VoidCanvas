@@ -61,6 +61,12 @@ impl Cell {
         Self { ch, fg, bg }
     }
 
+    #[cfg(test)]
+    pub fn with_bg(mut self, bg: Color) -> Self {
+        self.bg = bg;
+        self
+    }
+
     /// Nothing to draw: no glyph and no background.
     pub fn is_empty(&self) -> bool {
         self.ch == ' ' && self.bg.is_transparent()

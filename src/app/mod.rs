@@ -12,6 +12,7 @@ use crate::tools::{
     shapes::{Shape, ShapeTool},
     selection::{SelectionTool, content_to_text, text_to_content},
     text::TextTool,
+    pixel::{PixelTool, halves},
 };
 mod chrome;
 mod dialogs;
@@ -33,6 +34,7 @@ const NUDGE_GROUPS: u64 = 1 << 63;
 #[derive(Default)]
 pub struct ToolState {
     pub brush:     BrushTool,
+    pub pixel:     PixelTool,
     pub eraser:    EraserTool,
     pub fill:      FillTool,
     pub shape:     ShapeTool,
@@ -170,6 +172,7 @@ impl AsciiArtEditor {
             brush_size:     self.tool_options.brush_size,
             is_primary,
             channels:       self.tool_options.channels,
+            mirror:         self.tool_options.mirror,
         }
     }
 
@@ -191,13 +194,17 @@ impl AsciiArtEditor {
 
     fn handle_canvas_event(&mut self, event: CanvasEvent) {
         match event {
-            CanvasEvent::Press { x, y, primary, mods } => {
+            CanvasEvent::Press { x, y, primary, mods, lower } => {
                 if self.drawing { return; }
                 self.nudge_group += 1;
                 let tool = self.active_tool;
                 self.last_primary = primary;
 
                 // Alt+click with a drawing tool samples like the eyedropper (and keeps sampling while dragged).
+                if tool == ToolType::Pixel && mods.alt {
+                    self.pick_pixel(x, y, lower, primary);
+                    return;
+                }
                 if tool == ToolType::Eyedropper || (mods.alt && tool.draws()) {
                     self.pick(x, y, primary);
                     self.drawing = true;
@@ -226,6 +233,7 @@ impl AsciiArtEditor {
 
                 match tool {
                     ToolType::Brush  => { self.tools.brush.on_press(&mut self.doc, x, y, &ctx); }
+                    ToolType::Pixel  => self.tools.pixel.on_press(&mut self.doc, x, y * 2 + lower as usize, &ctx),
                     ToolType::Eraser => { self.tools.eraser.on_press(&mut self.doc, x, y, &ctx); }
                     ToolType::Select => { self.tools.selection.on_press(&self.doc, x, y); }
                     t if t.is_shape() => self.tools.shape.on_press(x, y),
@@ -233,11 +241,12 @@ impl AsciiArtEditor {
                 }
             }
 
-            CanvasEvent::Drag { x, y } => {
+            CanvasEvent::Drag { x, y, lower } => {
                 if !self.drawing { return; }
                 let ctx = self.draw_context(self.last_primary);
                 match self.stroke_tool {
                     ToolType::Brush  => { self.tools.brush.on_drag(&mut self.doc, x, y, &ctx); }
+                    ToolType::Pixel  => self.tools.pixel.on_drag(&mut self.doc, x, y * 2 + lower as usize, &ctx),
                     ToolType::Eraser => { self.tools.eraser.on_drag(&mut self.doc, x, y, &ctx); }
                     ToolType::Eyedropper => self.pick(x, y, self.last_primary),
                     ToolType::Select => {
@@ -255,6 +264,7 @@ impl AsciiArtEditor {
                 let ctx = self.draw_context(self.last_primary);
                 let changes = match self.stroke_tool {
                     ToolType::Brush  => self.tools.brush.on_release(),
+                    ToolType::Pixel  => self.tools.pixel.on_release(),
                     ToolType::Eraser => self.tools.eraser.on_release(),
                     ToolType::Select => self.tools.selection.on_release(&mut self.doc),
                     tool => match self.shape_for(tool) {
@@ -281,6 +291,15 @@ impl AsciiArtEditor {
             ToolType::Border    => Shape::Border(options.border_style),
             _ => return None,
         })
+    }
+
+    /// Alt+click with the Pixel tool: picks the colour of the half-block pixel.
+    fn pick_pixel(&mut self, x: usize, y: usize, lower: bool, primary: bool) {
+        if x >= self.doc.width || y >= self.doc.height { return; }
+        let (top, bottom) = halves(&self.doc.composite_cell(x, y));
+        let color = if lower { bottom } else { top }.unwrap_or(crate::document::Color::TRANSPARENT);
+        let slot = if primary { &mut self.color_panel.primary_fg } else { &mut self.color_panel.secondary_fg };
+        *slot = color;
     }
 
     /// Eyedropper: copies the enabled channels of the visible cell into a slot.

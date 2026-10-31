@@ -26,6 +26,7 @@ fn ctx(ch: char, fg: Color, bg: Color) -> DrawContext {
         brush_size: 1,
         is_primary: true,
         channels: crate::tools::Channels::default(),
+        mirror: crate::tools::Mirror::default(),
     }
 }
 
@@ -485,6 +486,28 @@ mod ui {
     }
 
     #[test]
+    fn pixel_tool_paints_half_cells() {
+        let mut harness = harness();
+        harness.state_mut().active_tool = ToolType::Pixel;
+        harness.state_mut().color_panel.primary_fg = crate::document::Color::new(255, 0, 0, 255);
+        harness.state_mut().color_panel.secondary_fg = crate::document::Color::new(0, 0, 255, 255);
+        let rect = harness.state().canvas_state.screen_cell_rect(4, 2);
+        let top = rect.center() - egui::vec2(0.0, rect.height() / 4.0);
+        let bottom = rect.center() + egui::vec2(0.0, rect.height() / 4.0);
+        for (pos, primary) in [(top, true), (bottom, false)] {
+            let button_id = if primary { PointerButton::Primary } else { PointerButton::Secondary };
+            harness.hover_at(pos);
+            harness.step();
+            harness.event(Event::PointerButton { pos, button: button_id, pressed: true, modifiers: Modifiers::NONE });
+            harness.event(Event::PointerButton { pos, button: button_id, pressed: false, modifiers: Modifiers::NONE });
+            harness.step();
+        }
+        let cell = harness.state().doc.layers[0].get(4, 2).unwrap().clone();
+        assert_eq!(cell.ch, '▀');
+        assert_eq!((cell.fg.r, cell.bg.b), (255, 255), "red on top, blue below");
+    }
+
+    #[test]
     fn dialogs_and_dock_tabs_render() {
         let mut harness = harness();
         harness.state_mut().show_about_dialog = true;
@@ -570,6 +593,35 @@ mod stage2_tools {
         history.push(Command::Draw { layer_idx: 0, changes });
         history.undo(&mut doc);
         assert_eq!(doc.layers, original);
+    }
+}
+
+mod stage3 {
+    use super::{NONE, blue, ctx, red};
+    use crate::document::{Cell, Document};
+    use crate::tools::{Mirror, apply_stamps};
+    use crate::tools::pixel::{from_halves, halves};
+
+    #[test]
+    fn half_blocks_hold_two_pixels() {
+        assert_eq!(from_halves(Some(red()), Some(blue())), Cell::new('▀', red(), NONE).with_bg(blue()));
+        assert_eq!(from_halves(Some(red()), Some(red())).ch, '█');
+        assert_eq!(from_halves(None, Some(blue())), Cell::new('▄', blue(), NONE));
+        assert!(from_halves(None, None).is_empty());
+        for (top, bottom) in [(Some(red()), None), (None, Some(red())), (Some(red()), Some(blue())), (Some(blue()), Some(blue()))] {
+            assert_eq!(halves(&from_halves(top.clone(), bottom.clone())), (top, bottom));
+        }
+    }
+
+    #[test]
+    fn mirrored_brush_turns_glyphs() {
+        let mut doc = Document::new(10, 4);
+        let mut c = ctx('/', red(), NONE);
+        c.mirror = Mirror { x: true, y: true };
+        let stamps = c.mirror.stamps(vec![(1, 0, '/')], doc.width, doc.height);
+        apply_stamps(&mut doc, &stamps, &c);
+        let at = |x, y| doc.layers[0].get(x, y).unwrap().ch;
+        assert_eq!((at(1, 0), at(8, 0), at(1, 3), at(8, 3)), ('/', '\\', '\\', '/'));
     }
 }
 

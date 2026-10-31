@@ -3,16 +3,19 @@ pub mod eraser;
 pub mod fill;
 pub mod shapes;
 pub mod border;
+pub mod pixel;
 pub mod selection;
 pub mod text;
 
 use crate::document::{Cell, Color, Document};
+use crate::glyphs::{Transform, transform_glyph};
 use crate::icons;
 pub use crate::document::{Changes, merge_changes};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToolType {
     Brush,
+    Pixel,
     Text,
     Eyedropper,
     Eraser,
@@ -29,7 +32,7 @@ impl ToolType {
     pub fn groups() -> &'static [&'static [ToolType]] {
         &[
             &[ToolType::Select],
-            &[ToolType::Brush, ToolType::Eraser, ToolType::Fill, ToolType::Eyedropper],
+            &[ToolType::Brush, ToolType::Pixel, ToolType::Eraser, ToolType::Fill, ToolType::Eyedropper],
             &[ToolType::Text],
             &[ToolType::Line, ToolType::Rectangle, ToolType::Ellipse, ToolType::Border],
         ]
@@ -48,6 +51,7 @@ impl ToolType {
     pub fn icon(&self) -> &'static str {
         match self {
             ToolType::Brush     => icons::BRUSH,
+            ToolType::Pixel     => icons::PIXEL,
             ToolType::Text      => icons::TEXT,
             ToolType::Eyedropper => icons::EYEDROPPER,
             ToolType::Eraser    => icons::ERASER,
@@ -64,6 +68,7 @@ impl ToolType {
     pub fn key(&self) -> char {
         match self {
             ToolType::Brush     => 'B',
+            ToolType::Pixel     => 'P',
             ToolType::Text      => 'T',
             ToolType::Eyedropper => 'I',
             ToolType::Eraser    => 'E',
@@ -79,6 +84,7 @@ impl ToolType {
     pub fn name(&self) -> &'static str {
         match self {
             ToolType::Brush     => "Brush",
+            ToolType::Pixel     => "Pixel",
             ToolType::Text      => "Text",
             ToolType::Eyedropper => "Eyedropper",
             ToolType::Eraser    => "Eraser",
@@ -106,6 +112,42 @@ impl Default for Channels {
     }
 }
 
+/// Symmetry axes through the middle of the canvas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Mirror {
+    /// Mirror left ↔ right.
+    pub x: bool,
+    /// Mirror top ↔ bottom.
+    pub y: bool,
+}
+
+impl Mirror {
+    /// (x, y) and its mirror images in a `w` × `h` grid.
+    pub fn points(&self, x: usize, y: usize, w: usize, h: usize) -> Vec<(usize, usize)> {
+        let (mx, my) = (w - 1 - x.min(w - 1), h - 1 - y.min(h - 1));
+        let mut points = vec![(x, y)];
+        if self.x { points.push((mx, y)); }
+        if self.y { points.push((x, my)); }
+        if self.x && self.y { points.push((mx, my)); }
+        points
+    }
+
+    /// The stamps and their mirror images, with glyphs turned to match (`/` ↔ `\\`, `┌` ↔ `┐`, …).
+    pub fn stamps(&self, stamps: Vec<(usize, usize, char)>, w: usize, h: usize) -> Vec<(usize, usize, char)> {
+        if !self.x && !self.y { return stamps; }
+        let mut out = Vec::with_capacity(stamps.len() * 4);
+        for (x, y, ch) in stamps {
+            if x >= w || y >= h { continue; }
+            let flipped_x = transform_glyph(ch, Transform::FlipHorizontal);
+            out.push((x, y, ch));
+            if self.x { out.push((w - 1 - x, y, flipped_x)); }
+            if self.y { out.push((x, h - 1 - y, transform_glyph(ch, Transform::FlipVertical))); }
+            if self.x && self.y { out.push((w - 1 - x, h - 1 - y, transform_glyph(flipped_x, Transform::FlipVertical))); }
+        }
+        out
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DrawContext {
     pub primary_char: char,
@@ -117,6 +159,7 @@ pub struct DrawContext {
     pub brush_size: usize,
     pub is_primary: bool,
     pub channels: Channels,
+    pub mirror: Mirror,
 }
 
 impl DrawContext {

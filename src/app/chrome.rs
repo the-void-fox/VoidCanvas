@@ -163,7 +163,7 @@ impl AsciiArtEditor {
                     };
                     let options = &mut self.tool_options;
                     match tool {
-                        ToolType::Brush | ToolType::Eraser => {
+                        ToolType::Brush | ToolType::Eraser | ToolType::Pixel => {
                             ui.label("Size");
                             if icon_button(ui, icons::MINUS, 24.0, false, "Smaller  (-)").clicked() {
                                 options.brush_size = options.brush_size.saturating_sub(1).max(1);
@@ -214,7 +214,7 @@ impl AsciiArtEditor {
                             }
                         }
                     }
-                    if tool.draws() || tool == ToolType::Eyedropper {
+                    if (tool.draws() || tool == ToolType::Eyedropper) && tool != ToolType::Pixel {
                         if tool != ToolType::Line {
                             vdivider(ui);
                         }
@@ -234,9 +234,22 @@ impl AsciiArtEditor {
                             ui.toggle_value(on, label).on_hover_text(format!("{verb} {what}"));
                         }
                     }
+                    if tool.is_shape() || matches!(tool, ToolType::Brush | ToolType::Pixel | ToolType::Eraser | ToolType::Fill) {
+                        vdivider(ui);
+                        let mirror = &mut self.tool_options.mirror;
+                        if icon_toggle(ui, icons::FLIP_H, 26.0, mirror.x, "Mirror left ↔ right").clicked() {
+                            mirror.x = !mirror.x;
+                        }
+                        if icon_toggle(ui, icons::FLIP_V, 26.0, mirror.y, "Mirror top ↔ bottom").clicked() {
+                            mirror.y = !mirror.y;
+                        }
+                    }
                     if tool.is_shape() {
                         vdivider(ui);
                         hint(ui, "Shift: square / straight · Alt: from centre");
+                    } else if tool == ToolType::Pixel {
+                        vdivider(ui);
+                        hint(ui, "Square pixels from half blocks · right button: secondary colour · Alt+click: pick");
                     } else if matches!(tool, ToolType::Brush | ToolType::Eraser | ToolType::Fill) {
                         vdivider(ui);
                         hint(ui, "Right button: secondary slot · Alt+click: pick");

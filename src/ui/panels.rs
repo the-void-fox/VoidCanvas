@@ -1,7 +1,7 @@
 use egui::*;
 use crate::document::Color;
 use crate::theme;
-use crate::tools::{Channels, border::BorderStyle};
+use crate::tools::{Channels, Mirror, border::BorderStyle};
 use crate::ui::widgets::{color_chip, parse_hex, section_label, to_hex};
 
 /// One of the four colour slots.
@@ -158,6 +158,7 @@ pub struct ToolOptions {
     pub filled:        bool,
     pub border_style:  BorderStyle,
     pub channels:      Channels,
+    pub mirror:        Mirror,
 }
 
 impl Default for ToolOptions {
@@ -167,6 +168,7 @@ impl Default for ToolOptions {
             filled:       false,
             border_style: BorderStyle::Single,
             channels:     Channels::default(),
+            mirror:       Mirror::default(),
         }
     }
 }
