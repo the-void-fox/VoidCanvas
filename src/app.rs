@@ -815,98 +815,21 @@ impl AsciiArtEditor {
         }
     }
 
-    fn export_png(&mut self) {
-        use ab_glyph::{Font, FontRef, PxScale};
-        use image::{ImageBuffer, Rgba};
-
-        let cell_w: u32 = 10;
-        let cell_h: u32 = 18;
-        let img_w = self.doc.width  as u32 * cell_w;
-        let img_h = self.doc.height as u32 * cell_h;
-
-        let font_bytes = include_bytes!("assets/FiraCode.ttf");
-        let font = match FontRef::try_from_slice(font_bytes) {
-            Ok(f) => f,
-            Err(e) => {
-                self.show_status(format!("PNG export: font error – {e}"));
-                return;
-            }
-        };
-        let scale = PxScale::from(cell_h as f32 * 0.82);
-
-        let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> =
-            ImageBuffer::from_pixel(img_w, img_h, Rgba([0, 0, 0, 255]));
-
-        for cy in 0..self.doc.height {
-            for cx in 0..self.doc.width {
-                let px_base = cx as u32 * cell_w;
-                let py_base = cy as u32 * cell_h;
-
-                let cell = self.doc.composite_cell(cx, cy);
-
-                if !cell.bg.is_transparent() {
-                    let [r, g, b, a] = [cell.bg.r, cell.bg.g, cell.bg.b, cell.bg.a];
-                    for dy in 0..cell_h {
-                        for dx in 0..cell_w {
-                            img.put_pixel(px_base + dx, py_base + dy, Rgba([r, g, b, a]));
-                        }
-                    }
-                }
-
-                if cell.ch != ' ' {
-                    let glyph_id = font.glyph_id(cell.ch);
-                    let glyph = glyph_id.with_scale_and_position(
-                        scale,
-                        ab_glyph::point(0.0, {
-                            use ab_glyph::ScaleFont;
-                            font.as_scaled(scale).ascent()
-                        }),
-                    );
-
-                    if let Some(outlined) = font.outline_glyph(glyph) {
-                        let bounds = outlined.px_bounds();
-                        let g_w = bounds.width()  as u32;
-                        let x_off = ((cell_w as i32) - (g_w as i32)) / 2 + bounds.min.x as i32;
-                        let y_off = bounds.min.y as i32;
-
-                        let [fr, fg_c, fb, _] = [cell.fg.r, cell.fg.g, cell.fg.b, cell.fg.a];
-
-                        outlined.draw(|gx, gy, cov| {
-                            if cov < 0.01 { return; }
-                            let sx = px_base as i32 + gx as i32 + x_off;
-                            let sy = py_base as i32 + gy as i32 + y_off;
-                            if sx < 0 || sy < 0 { return; }
-                            let (sx, sy) = (sx as u32, sy as u32);
-                            if sx >= img_w || sy >= img_h { return; }
-
-                            let bg_px = *img.get_pixel(sx, sy);
-                            let blend = |bg: u8, fg: u8| -> u8 {
-                                ((bg as f32) * (1.0 - cov) + (fg as f32) * cov) as u8
-                            };
-                            img.put_pixel(sx, sy, Rgba([
-                                blend(bg_px[0], fr),
-                                blend(bg_px[1], fg_c),
-                                blend(bg_px[2], fb),
-                                255,
-                            ]));
-                        });
-                    }
-                }
-            }
-        }
-
-        if let Some(path) = rfd::FileDialog::new()
+    fn export_png(&mut self, transparent: bool) {
+        let Some(mut path) = rfd::FileDialog::new()
             .add_filter("PNG Image", &["png"])
             .save_file()
-        {
-            let mut path = path;
-            if path.extension().map_or(true, |ext| ext != "png") {
-                path.set_extension("png");
-            }
-            match img.save(&path) {
-                Ok(_) => self.show_status(format!("Exported PNG: {}", path.display())),
-                Err(e) => self.show_status(format!("PNG export failed: {e}")),
-            }
+        else {
+            return;
+        };
+        if path.extension().is_none_or(|ext| ext != "png") {
+            path.set_extension("png");
+        }
+        let result = crate::export::render_png(&self.doc, transparent)
+            .and_then(|img| img.save(&path).map_err(|e| e.to_string()));
+        match result {
+            Ok(()) => self.show_status(format!("Exported PNG: {}", path.display())),
+            Err(e) => self.show_status(format!("PNG export failed: {e}")),
         }
     }
 
@@ -1034,7 +957,8 @@ impl eframe::App for AsciiArtEditor {
                     if ui.add(Button::new("Save As…").shortcut_text("Ctrl+Shift+S")).clicked() { self.save_as(); }
                     ui.separator();
                     if ui.button("Export Text…").clicked() { self.export_text(); }
-                    if ui.button("Export PNG…").clicked()  { self.export_png(); }
+                    if ui.button("Export PNG…").clicked()  { self.export_png(false); }
+                    if ui.button("Export PNG (Transparent)…").clicked() { self.export_png(true); }
                     ui.separator();
                     if ui.button("Quit").clicked() { self.request(PendingAction::Quit, &ctx); }
                 });

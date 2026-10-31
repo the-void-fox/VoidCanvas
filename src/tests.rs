@@ -274,3 +274,80 @@ mod ui {
         assert_eq!(harness.state().char_palette.search, "e");
     }
 }
+
+mod minor_fixes {
+    use crate::document::{Cell, Color, Document};
+    use crate::tools::{brush_positions, shapes::ellipse_points};
+    use crate::ui::char_palette::{CATEGORIES, search};
+
+    #[test]
+    fn every_brush_size_is_distinct() {
+        for size in 1..=6 {
+            let cells = brush_positions(10, 10, size);
+            assert_eq!(cells.len(), size * size, "size {size}");
+        }
+    }
+
+    #[test]
+    fn ellipse_fits_its_box() {
+        for w in 1..=9 {
+            for h in 1..=9 {
+                let (x2, y2) = (2 + w - 1, 3 + h - 1);
+                let outline = ellipse_points(2, 3, x2, y2, false);
+                let filled = ellipse_points(2, 3, x2, y2, true);
+                let xs = || outline.iter().map(|p| p.0);
+                let ys = || outline.iter().map(|p| p.1);
+                assert_eq!((xs().min(), xs().max()), (Some(2), Some(x2)), "{w}x{h}");
+                assert_eq!((ys().min(), ys().max()), (Some(3), Some(y2)), "{w}x{h}");
+                assert!(outline.iter().all(|p| filled.contains(p)), "{w}x{h}");
+            }
+        }
+    }
+
+    #[test]
+    fn char_search_finds_codes_categories_and_any_char() {
+        assert_eq!(search("2588").first(), Some(&'█'));
+        assert_eq!(search("U+2588").first(), Some(&'█'));
+        assert!(search("arrow").contains(&'→'));
+        assert_eq!(search("ж"), vec!['ж']);
+        assert!(!search("face").contains(&'\u{face}'), "plain words are not code points");
+    }
+
+    #[test]
+    fn palettes_have_no_duplicates() {
+        for (name, chars) in CATEGORIES {
+            let mut seen = std::collections::HashSet::new();
+            for c in chars.chars() {
+                assert!(seen.insert(c), "{name} has {c} twice");
+            }
+        }
+    }
+
+    #[test]
+    fn png_export_blends_alpha_and_can_be_transparent() {
+        let mut doc = Document::new(2, 1);
+        doc.layers[0].set(1, 0, Cell::new(' ', Color::WHITE, Color::new(255, 0, 0, 128)));
+
+        let img = crate::export::render_png(&doc, true).unwrap();
+        assert_eq!(img.get_pixel(0, 0)[3], 0, "empty cell stays transparent");
+        let red = img.get_pixel(crate::export::CELL_W as u32 + 1, 1);
+        assert_eq!((red[0], red[3]), (255, 128));
+
+        let img = crate::export::render_png(&doc, false).unwrap();
+        let red = img.get_pixel(crate::export::CELL_W as u32 + 1, 1);
+        assert_eq!((red[0], red[1], red[3]), (128, 0, 255), "half-transparent red over black");
+    }
+
+    #[test]
+    fn png_full_blocks_leave_no_seams() {
+        let mut doc = Document::new(3, 3);
+        for y in 0..3 {
+            for x in 0..3 {
+                doc.layers[0].set(x, y, Cell::new('█', Color::WHITE, Color::TRANSPARENT));
+            }
+        }
+        let img = crate::export::render_png(&doc, false).unwrap();
+        let darkest = img.pixels().map(|p| p[0]).min().unwrap();
+        assert!(darkest > 200, "a seam between blocks: darkest pixel {darkest}");
+    }
+}

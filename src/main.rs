@@ -4,6 +4,7 @@ mod app;
 #[cfg(debug_assertions)]
 mod dev;
 mod document;
+mod export;
 mod history;
 mod tools;
 mod ui;
@@ -39,7 +40,7 @@ fn main() -> eframe::Result<()> {
             cc.egui_ctx.set_theme(egui::Theme::Dark);
 
             let mut fonts = egui::FontDefinitions::default();
-            let font_bytes = include_bytes!("assets/FiraCode.ttf").to_vec();
+            let font_bytes = export::FONT.to_vec();
             fonts.font_data.insert(
                 "FiraCode".to_owned(),
                 std::sync::Arc::new(egui::FontData::from_owned(font_bytes)),

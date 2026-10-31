@@ -94,13 +94,15 @@ pub fn merge_changes(into: &mut Changes, more: Changes) {
     }
 }
 
+/// A `size`×`size` square around (cx, cy); even sizes reach one cell further right / down.
 pub fn brush_positions(cx: usize, cy: usize, size: usize) -> Vec<(usize, usize)> {
     let mut positions = Vec::new();
-    let half = (size / 2) as isize;
+    let size = size.max(1) as isize;
+    let (lo, hi) = (-(size - 1) / 2, size / 2);
     let cx = cx as isize;
     let cy = cy as isize;
-    for dy in -half..=half {
-        for dx in -half..=half {
+    for dy in lo..=hi {
+        for dx in lo..=hi {
             let x = cx + dx;
             let y = cy + dy;
             if x >= 0 && y >= 0 {

@@ -78,6 +78,7 @@ impl CanvasState {
     }
 
     /// Where cell (x, y) was on screen in the last frame.
+    #[cfg(test)]
     pub fn screen_cell_rect(&self, x: usize, y: usize) -> Rect {
         self.cell_rect(x, y, canvas_origin(self.view_rect))
     }

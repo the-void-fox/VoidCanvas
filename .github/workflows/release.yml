@@ -11,50 +11,59 @@ on:
 jobs:
   create-release:
     runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
       - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          generate_release_notes: true
 
   build:
     needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # The oldest supported Ubuntu keeps the glibc requirement low,
+          # so the binary runs on more distributions.
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            artifact_name: void_canvas
-            asset_name: void_canvas-linux-x86_64
+            bin: void_canvas
+            asset: linux-x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: void_canvas.exe
-            asset_name: void_canvas-windows-x86_64.exe
+            bin: void_canvas.exe
+            asset: windows-x86_64.exe
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
-      - uses: actions-rs/cargo@v1
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libxkbcommon-dev
+
+      - name: Test
+        run: cargo test --locked --target ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          name="void-canvas-${GITHUB_REF_NAME#v}-${{ matrix.asset }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$name"
+          echo "ASSET=$name" >> "$GITHUB_ENV"
+
+      - name: Upload
+        uses: softprops/action-gh-release@v2
         with:
-          command: build
-          args: --release --target ${{ matrix.target }}
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
-          asset_name: ${{ matrix.asset_name }}
-          asset_content_type: application/octet-stream
+          files: ${{ env.ASSET }}

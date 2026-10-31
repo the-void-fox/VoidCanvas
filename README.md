@@ -107,8 +107,10 @@ Every layer, its cells, and their RGBA colours are stored verbatim.
 
 ## PNG Export
 
-**File → Export PNG…** renders the composited canvas at **10 × 18 px per cell** using the bundled FiraCode font.  
-Background and foreground RGBA colours are preserved exactly.
+**File → Export PNG…** renders the composited canvas with the bundled FiraCode font at **10 × 20 px per cell**
+(one glyph advance × one line), so block and box-drawing characters join without seams.  
+Background and foreground RGBA colours are alpha-blended exactly.
+**Export PNG (Transparent)…** leaves empty cells fully transparent instead of black.
 
 ---
 

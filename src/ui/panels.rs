@@ -26,9 +26,6 @@ impl Default for ColorPanel {
 
 impl ColorPanel {
     pub fn show(&mut self, ui: &mut Ui) {
-        ui.label(RichText::new("Colors").strong());
-        ui.separator();
-
         ui.group(|ui| {
             ui.label("Primary");
             ui.horizontal(|ui| {
@@ -181,9 +178,6 @@ impl Default for ToolOptionsPanel {
 
 impl ToolOptionsPanel {
     pub fn show(&mut self, ui: &mut Ui) {
-        ui.label(RichText::new("Tool Options").strong());
-        ui.separator();
-
         ui.horizontal(|ui| {
             ui.label("Brush size:");
             ui.add(Slider::new(&mut self.brush_size, 1..=20));

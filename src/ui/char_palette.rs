@@ -8,9 +8,9 @@ pub const CATEGORIES: &[(&str, &str)] = &[
     ("Numbers",
      "0123456789"),
     ("Lines",
-     "─│┌┐└┘├┤┬┴┼━┃┏┓┗┛┣┫┳┻╋═║╔╗╚╝╠╣╦╩╬╒╕╖╗╘╙╚╛╜╝╞╟╠╡╢╣╤╥╦╧╨╩╪╫╬╭╮╯╰"),
+     "─│┌┐└┘├┤┬┴┼━┃┏┓┗┛┣┫┳┻╋═║╔╗╚╝╠╣╦╩╬╒╓╕╖╘╙╛╜╞╟╡╢╤╥╧╨╪╫╭╮╯╰╌╍╎╏┄┅┆┇┈┉┊┋╱╲╳"),
     ("Blocks",
-     "█▉▊▋▌▍▎▏▀▁▂▃▄▅▆▇▐░▒▓■□▪▫▬▭▮▯"),
+     "█▉▊▋▌▍▎▏▀▁▂▃▄▅▆▇▐░▒▓▖▗▘▙▚▛▜▝▞▟■□▪▫▬▭▮▯"),
     ("Geometry",
      "●○◐◑◒◓◔◕◖◗◘◙◚◛◜◝◞◟◠◡◢◣◤◥◦◧◨◩◪◫◬◭◮◯★☆✪⦿"),
     ("Arrows",
@@ -26,7 +26,7 @@ pub const CATEGORIES: &[(&str, &str)] = &[
     ("Symbols",
      "☀☁☂☃★☆☉☐☑☒☺☻☹☠☢☣☭☮☯♠♡♢♣♤♥♦♧♨♪♫♩♬♀♂⚤⚥⚧⚨⚩⚫⚪⚰⚱⚲⚠⚡⌂⌐⌘⌥⌫⌦⌧⌨⏎⏏©®™"),
     ("Currency",
-     "$¢£¤¥€₠₡₢₣₤₥₦₧₨₩₪₫€₭₮₯₰₱₲₳₴₵₶₷₸₹₺₻₼₽₾"),
+     "$¢£¤¥€₠₡₢₣₤₥₦₧₨₩₪₫₭₮₯₰₱₲₳₴₵₶₷₸₹₺₻₼₽₾"),
     ("Progress",
      "█▇▆▅▄▃▂▁▉▊▋▌▍▎▏░▒▓"),
     ("Nerd Dev",
@@ -38,6 +38,47 @@ pub const CATEGORIES: &[(&str, &str)] = &[
     ("Nerd UI",
      "\u{f00c}\u{f00d}\u{f011}\u{f012}\u{f014}\u{f021}\u{f024}\u{f026}\u{f027}\u{f028}\u{f02e}\u{f030}\u{f031}\u{f032}\u{f033}\u{f06e}\u{f070}\u{f0c9}\u{f0e0}\u{f0eb}\u{f0f3}\u{f119}\u{f11a}\u{f155}"),
 ];
+
+/// Characters for a search query: a code point (`2588`, `U+2588`, `0x2588`),
+/// a category name (`arrow`), or the characters themselves (`─│`).
+/// Typed characters that are in no palette are offered too.
+pub fn search(query: &str) -> Vec<char> {
+    const MAX_RESULTS: usize = 256;
+    let query = query.trim();
+    let lower = query.to_lowercase();
+
+    let mut found: Vec<char> = Vec::new();
+    let mut push = |c: char| {
+        if !found.contains(&c) && found.len() < MAX_RESULTS { found.push(c); }
+    };
+
+    if let Some(c) = parse_code_point(&lower) { push(c); }
+
+    let mut category_hit = false;
+    for (name, chars) in CATEGORIES {
+        let by_name = lower.chars().count() > 1 && name.to_lowercase().contains(&lower);
+        category_hit |= by_name;
+        for c in chars.chars() {
+            if by_name || query.contains(c) { push(c); }
+        }
+    }
+
+    if !category_hit {
+        query.chars().filter(|c| !c.is_whitespace() && !c.is_control()).for_each(&mut push);
+    }
+    found
+}
+
+fn parse_code_point(query: &str) -> Option<char> {
+    let explicit = ["u+", "0x", "\\u", "u"].iter().find_map(|p| query.strip_prefix(p));
+    let hex = match explicit {
+        Some(rest) => rest,
+        // Bare hex only if it looks like a code point, so words like "face" stay words.
+        None if (4..=6).contains(&query.len()) && query.chars().any(|c| c.is_ascii_digit()) => query,
+        None => return None,
+    };
+    u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+}
 
 pub struct CharPalette {
     pub category: usize,
@@ -72,14 +113,10 @@ impl CharPalette {
 
             ui.separator();
 
-            let chars: Vec<char> = if self.search.is_empty() {
+            let chars: Vec<char> = if self.search.trim().is_empty() {
                 CATEGORIES[self.category].1.chars().collect()
             } else {
-                CATEGORIES.iter()
-                    .flat_map(|(_, chars)| chars.chars())
-                    .filter(|c| c.to_string().contains(&self.search))
-                    .take(64)
-                    .collect()
+                search(&self.search)
             };
 
             let btn_size = Vec2::splat(36.0);
