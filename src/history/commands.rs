@@ -36,3 +36,18 @@ pub enum Command {
         old_layers: Vec<Layer>,
     },
 }
+
+impl Command {
+    /// Name in the History panel when the caller gives none.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Command::Draw { .. }           => "Edit",
+            Command::LayerAdd { .. }       => "New Layer",
+            Command::LayerRemove { .. }    => "Delete Layer",
+            Command::LayerMove { .. }      => "Move Layer",
+            Command::LayerMergeDown { .. } => "Merge Down",
+            Command::LayerRename { .. }    => "Rename Layer",
+            Command::Resize { .. }         => "Resize Canvas",
+        }
+    }
+}

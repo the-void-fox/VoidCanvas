@@ -11,6 +11,17 @@ pub enum Transform {
     RotateCcw,
 }
 
+impl Transform {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Transform::FlipHorizontal => "Flip Horizontal",
+            Transform::FlipVertical   => "Flip Vertical",
+            Transform::RotateCw       => "Rotate Right",
+            Transform::RotateCcw      => "Rotate Left",
+        }
+    }
+}
+
 /// The block mirrored / rotated, with every glyph turned to match.
 /// Rotation swaps width and height.
 pub fn transform_block(block: &[Vec<Cell>], t: Transform) -> Vec<Vec<Cell>> {

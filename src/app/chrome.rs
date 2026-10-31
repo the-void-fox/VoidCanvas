@@ -313,19 +313,71 @@ impl AsciiArtEditor {
                     });
 
                 Frame::NONE.inner_margin(Margin { left: 12, right: 12, top: 2, bottom: 8 }).show(ui, |ui| {
-                    let tabs = [(icons::GLYPHS, "Glyphs"), (icons::PALETTE, "Colors")];
-                    let current = if self.dock_tab == DockTab::Glyphs { 0 } else { 1 };
-                    if let Some(i) = tab_bar(ui, &tabs, current) {
-                        self.dock_tab = if i == 0 { DockTab::Glyphs } else { DockTab::Colors };
+                    const TABS: [(DockTab, &str, &str); 3] = [
+                        (DockTab::Glyphs, icons::GLYPHS, "Glyphs"),
+                        (DockTab::Colors, icons::PALETTE, "Colors"),
+                        (DockTab::History, icons::HISTORY, "History"),
+                    ];
+                    let labels = TABS.map(|(_, icon, label)| (icon, label));
+                    let current = TABS.iter().position(|t| t.0 == self.dock_tab).unwrap_or(0);
+                    if let Some(i) = tab_bar(ui, &labels, current) {
+                        self.dock_tab = TABS[i].0;
                     }
                     widgets::hline(ui);
                     ui.add_space(6.0);
                     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.dock_tab {
                         DockTab::Glyphs => self.char_palette.show(ui, &mut self.primary_char, &mut self.secondary_char),
                         DockTab::Colors => self.color_panel.show(ui),
+                        DockTab::History => self.history_panel(ui),
                     });
                 });
             });
+    }
+
+    /// Every recorded step; clicking one undoes or redoes up to it.
+    fn history_panel(&mut self, ui: &mut Ui) {
+        let (done, undone) = self.history.labels();
+        let applied = done.len();
+        let mut jump = None;
+        let mut row = |ui: &mut Ui, label: &str, position: usize| {
+            let current = position == applied;
+            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+            let bg = if current {
+                theme::ACCENT_SOFT
+            } else if resp.hovered() {
+                theme::SURFACE
+            } else {
+                Color32::TRANSPARENT
+            };
+            ui.painter().rect_filled(rect, 5.0, bg);
+            if current {
+                let bar = Rect::from_min_size(rect.min + vec2(0.0, 5.0), vec2(3.0, rect.height() - 10.0));
+                ui.painter().rect_filled(bar, 1.5, theme::ACCENT);
+            }
+            let color = if position > applied {
+                theme::TEXT_FAINT
+            } else if current {
+                theme::TEXT
+            } else {
+                theme::TEXT_DIM
+            };
+            let text_pos = rect.left_center() + vec2(12.0, 0.0);
+            ui.painter().text(text_pos, Align2::LEFT_CENTER, label, FontId::proportional(13.0), color);
+            if resp.clicked() {
+                jump = Some(position);
+            }
+        };
+
+        row(ui, "Start", 0);
+        for (i, label) in done.iter().enumerate() {
+            row(ui, label, i + 1);
+        }
+        for (i, label) in undone.iter().enumerate() {
+            row(ui, label, applied + 1 + i);
+        }
+        if let Some(position) = jump {
+            self.history.jump_to(position, &mut self.doc);
+        }
     }
 
     pub(super) fn status_bar(&mut self, ui: &mut Ui) {

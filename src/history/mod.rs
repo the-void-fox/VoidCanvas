@@ -4,10 +4,16 @@ pub use commands::Command;
 use std::collections::VecDeque;
 use crate::document::{Changes, Document, merge_changes};
 
+/// A recorded command with the name shown in the History panel.
+struct Entry {
+    cmd: Command,
+    label: String,
+}
+
 pub struct History {
     pub max_size: usize,
-    undo_stack: VecDeque<Command>,
-    redo_stack: Vec<Command>,
+    undo_stack: VecDeque<Entry>,
+    redo_stack: Vec<Entry>,
     /// Group of the newest command, if it may still absorb more changes.
     open_group: Option<u64>,
 }
@@ -23,8 +29,15 @@ impl History {
     }
 
     /// Records a command whose effect is already applied to the document.
+    #[cfg(test)]
     pub fn push(&mut self, cmd: Command) {
-        self.undo_stack.push_back(cmd);
+        let label = cmd.label();
+        self.push_as(cmd, label);
+    }
+
+    /// Like [`Self::push`], with a name for the History panel.
+    pub fn push_as(&mut self, cmd: Command, label: impl Into<String>) {
+        self.undo_stack.push_back(Entry { cmd, label: label.into() });
         if self.undo_stack.len() > self.max_size {
             self.undo_stack.pop_front();
         }
@@ -34,30 +47,35 @@ impl History {
 
     /// Records drawn changes; consecutive pushes with the same `group`
     /// (e.g. one typing session) become a single undo step.
-    pub fn push_grouped(&mut self, layer_idx: usize, changes: Changes, group: u64) {
+    pub fn push_grouped(&mut self, layer_idx: usize, changes: Changes, group: u64, label: &str) {
         if self.open_group == Some(group)
-            && let Some(Command::Draw { layer_idx: top_layer, changes: top }) = self.undo_stack.back_mut()
+            && let Some(Entry { cmd: Command::Draw { layer_idx: top_layer, changes: top }, .. }) = self.undo_stack.back_mut()
             && *top_layer == layer_idx
         {
             merge_changes(top, changes);
             self.redo_stack.clear();
             return;
         }
-        self.push(Command::Draw { layer_idx, changes });
+        self.push_as(Command::Draw { layer_idx, changes }, label);
         self.open_group = Some(group);
     }
 
     /// Applies a command to the document and records it.
     pub fn execute(&mut self, cmd: Command, doc: &mut Document) {
+        let label = cmd.label();
+        self.execute_as(cmd, label, doc);
+    }
+
+    pub fn execute_as(&mut self, cmd: Command, label: impl Into<String>, doc: &mut Document) {
         apply_command(&cmd, doc);
-        self.push(cmd);
+        self.push_as(cmd, label);
     }
 
     pub fn undo(&mut self, doc: &mut Document) -> bool {
         self.open_group = None;
-        if let Some(cmd) = self.undo_stack.pop_back() {
-            apply_inverse(&cmd, doc);
-            self.redo_stack.push(cmd);
+        if let Some(entry) = self.undo_stack.pop_back() {
+            apply_inverse(&entry.cmd, doc);
+            self.redo_stack.push(entry);
             true
         } else {
             false
@@ -66,9 +84,9 @@ impl History {
 
     pub fn redo(&mut self, doc: &mut Document) -> bool {
         self.open_group = None;
-        if let Some(cmd) = self.redo_stack.pop() {
-            apply_command(&cmd, doc);
-            self.undo_stack.push_back(cmd);
+        if let Some(entry) = self.redo_stack.pop() {
+            apply_command(&entry.cmd, doc);
+            self.undo_stack.push_back(entry);
             true
         } else {
             false
@@ -77,6 +95,20 @@ impl History {
 
     pub fn can_undo(&self) -> bool { !self.undo_stack.is_empty() }
     pub fn can_redo(&self) -> bool { !self.redo_stack.is_empty() }
+
+    /// Names of the applied steps (oldest first) and of the undone ones (next redo first).
+    pub fn labels(&self) -> (Vec<&str>, Vec<&str>) {
+        (
+            self.undo_stack.iter().map(|e| e.label.as_str()).collect(),
+            self.redo_stack.iter().rev().map(|e| e.label.as_str()).collect(),
+        )
+    }
+
+    /// Undoes or redoes until exactly `applied` steps are applied.
+    pub fn jump_to(&mut self, applied: usize, doc: &mut Document) {
+        while self.undo_stack.len() > applied && self.undo(doc) {}
+        while self.undo_stack.len() < applied && self.redo(doc) {}
+    }
 
     pub fn clear(&mut self) {
         self.undo_stack.clear();

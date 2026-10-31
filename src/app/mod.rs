@@ -56,6 +56,7 @@ impl Default for ToolState {
 pub enum DockTab {
     Glyphs,
     Colors,
+    History,
 }
 
 /// An action that would throw away unsaved work; it waits for the user's answer.
@@ -165,9 +166,9 @@ impl AsciiArtEditor {
     }
 
     /// Records changes that were already applied to the active layer.
-    fn commit_draw(&mut self, changes: Changes) {
+    fn commit_draw(&mut self, changes: Changes, label: &str) {
         if changes.is_empty() { return; }
-        self.history.push(Command::Draw { layer_idx: self.doc.active_layer, changes });
+        self.history.push_as(Command::Draw { layer_idx: self.doc.active_layer, changes }, label);
         self.doc.modified = true;
     }
 
@@ -207,7 +208,7 @@ impl AsciiArtEditor {
 
                 if tool == ToolType::Fill {
                     let changes = self.tools.fill.flood_fill(&mut self.doc, x, y, &ctx);
-                    self.commit_draw(changes);
+                    self.commit_draw(changes, "Fill");
                     return;
                 }
 
@@ -256,7 +257,8 @@ impl AsciiArtEditor {
 
                 let mut all = std::mem::take(&mut self.stroke_changes);
                 merge_changes(&mut all, changes);
-                self.commit_draw(all);
+                let label = if self.stroke_tool == ToolType::Select { "Move" } else { self.stroke_tool.name() };
+                self.commit_draw(all, label);
             }
         }
     }
@@ -337,7 +339,7 @@ impl AsciiArtEditor {
             }
         }
         if !changes.is_empty() {
-            self.history.push_grouped(self.doc.active_layer, changes, self.tools.text.group);
+            self.history.push_grouped(self.doc.active_layer, changes, self.tools.text.group, "Typing");
             self.doc.modified = true;
         }
     }
@@ -483,7 +485,7 @@ impl AsciiArtEditor {
         if self.active_layer_locked() { return; }
         if self.copy(ctx) {
             let changes = self.tools.selection.delete(&mut self.doc);
-            self.commit_draw(changes);
+            self.commit_draw(changes, "Cut");
             self.show_status("Cut selection");
         }
     }
@@ -511,7 +513,7 @@ impl AsciiArtEditor {
             .or(self.tools.selection.selection.map(|(x1, y1, _, _)| (x1, y1)))
             .unwrap_or((0, 0));
         let changes = self.tools.selection.paste(&mut self.doc, &content, x, y);
-        self.commit_draw(changes);
+        self.commit_draw(changes, "Paste");
         self.show_status("Pasted");
     }
 
@@ -524,7 +526,7 @@ impl AsciiArtEditor {
         if self.drawing || self.active_layer_locked() { return; }
         let Some(block) = self.tools.selection.copy(&self.doc) else { return };
         let changes = self.tools.selection.replace(&mut self.doc, &transform_block(&block, t));
-        self.commit_draw(changes);
+        self.commit_draw(changes, t.label());
     }
 
     /// Arrow keys: moves the selected block; a run of moves is one undo step.
@@ -532,7 +534,7 @@ impl AsciiArtEditor {
         if self.active_layer_locked() { return; }
         let changes = self.tools.selection.nudge(&mut self.doc, dx, dy);
         if !changes.is_empty() {
-            self.history.push_grouped(self.doc.active_layer, changes, self.nudge_group);
+            self.history.push_grouped(self.doc.active_layer, changes, self.nudge_group, "Move");
             self.doc.modified = true;
         }
     }
@@ -540,7 +542,7 @@ impl AsciiArtEditor {
     fn delete_selection(&mut self) {
         if self.tools.selection.selection.is_none() || self.active_layer_locked() { return; }
         let changes = self.tools.selection.delete(&mut self.doc);
-        self.commit_draw(changes);
+        self.commit_draw(changes, "Delete");
     }
 
     // ── Layers & canvas (all undoable) ───────────────────────────────────────
@@ -575,7 +577,9 @@ impl AsciiArtEditor {
             LayerAction::Duplicate => {
                 let mut layer = self.doc.active_layer().clone();
                 layer.name = format!("{} (copy)", layer.name);
-                Command::LayerAdd { index: active + 1, layer }
+                let cmd = Command::LayerAdd { index: active + 1, layer };
+                self.history.execute_as(cmd, "Duplicate Layer", &mut self.doc);
+                return;
             }
             LayerAction::Remove => {
                 if n <= 1 { return; }
@@ -619,7 +623,7 @@ impl AsciiArtEditor {
         let changes = self.doc.active_layer().clear_changes();
         if changes.is_empty() { return; }
         let layer_idx = self.doc.active_layer;
-        self.history.execute(Command::Draw { layer_idx, changes }, &mut self.doc);
+        self.history.execute_as(Command::Draw { layer_idx, changes }, "Clear Layer", &mut self.doc);
     }
 
     fn resize_canvas(&mut self, width: usize, height: usize) {

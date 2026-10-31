@@ -122,6 +122,28 @@ fn drawing_is_undone_on_its_own_layer_after_reordering() {
 }
 
 #[test]
+fn history_lists_steps_and_jumps_between_them() {
+    let mut doc = Document::new(4, 1);
+    let mut history = History::new(10);
+    for (i, label) in ["Brush", "Fill", "Typing"].iter().enumerate() {
+        let cell = glyph(char::from(b'a' + i as u8));
+        doc.layers[0].set(i, 0, cell.clone());
+        let changes = Changes::from([((i, 0), (Cell::empty(), cell))]);
+        history.push_as(Command::Draw { layer_idx: 0, changes }, *label);
+    }
+    let row = |doc: &Document| (0..3).map(|x| doc.layers[0].get(x, 0).unwrap().ch).collect::<String>();
+
+    history.jump_to(1, &mut doc);
+    assert_eq!(row(&doc), "a  ");
+    assert_eq!(history.labels(), (vec!["Brush"], vec!["Fill", "Typing"]));
+
+    history.jump_to(3, &mut doc);
+    assert_eq!(row(&doc), "abc");
+    history.jump_to(0, &mut doc);
+    assert_eq!(row(&doc), "   ");
+}
+
+#[test]
 fn undo_works_on_a_locked_layer() {
     let mut doc = Document::new(2, 1);
     let mut history = History::new(10);
@@ -404,6 +426,8 @@ mod ui {
         harness.state_mut().show_new_dialog = true;
         harness.state_mut().show_resize_dialog = true;
         harness.state_mut().dock_tab = crate::app::DockTab::Colors;
+        harness.step();
+        harness.state_mut().dock_tab = crate::app::DockTab::History;
         harness.step();
         harness.step();
     }
