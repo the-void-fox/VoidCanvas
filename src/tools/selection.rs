@@ -1,5 +1,5 @@
 use crate::document::{Cell, Color, Document};
-use super::Changes;
+use super::{Changes, merge_changes};
 
 #[derive(Default, Debug, Clone)]
 pub struct SelectionTool {
@@ -112,7 +112,7 @@ impl SelectionTool {
         Some(layer.get_region(x1, y1, x2, y2))
     }
 
-    pub fn paste(&mut self, doc: &mut Document, content: &Vec<Vec<Cell>>, x: usize, y: usize) -> Changes {
+    pub fn paste(&mut self, doc: &mut Document, content: &[Vec<Cell>], x: usize, y: usize) -> Changes {
         let h = content.len();
         let w = content.first().map(|r| r.len()).unwrap_or(0);
         let layer = doc.active_layer_mut();
@@ -129,9 +129,32 @@ impl SelectionTool {
             }
         }
 
-        self.selection = Some((x, y, (x + w).saturating_sub(1), (y + h).saturating_sub(1)));
-        self.content = Some(content.clone());
+        let (max_x, max_y) = (doc.width.saturating_sub(1), doc.height.saturating_sub(1));
+        self.selection = Some((x, y, (x + w).saturating_sub(1).min(max_x), (y + h).saturating_sub(1).min(max_y)));
+        self.content = Some(content.to_vec());
         self.source_rect = self.selection;
+        changes
+    }
+
+    /// Swaps the selected block for `block` (same top-left corner), e.g. a rotated copy.
+    pub fn replace(&mut self, doc: &mut Document, block: &[Vec<Cell>]) -> Changes {
+        let Some(sel) = self.selection else { return Changes::new(); };
+        let mut changes = clear_rect(doc, sel);
+        merge_changes(&mut changes, self.paste(doc, block, sel.0, sel.1));
+        changes
+    }
+
+    /// Moves the selected block by (dx, dy) cells, keeping it inside the document.
+    pub fn nudge(&mut self, doc: &mut Document, dx: isize, dy: isize) -> Changes {
+        let Some(sel @ (x1, y1, x2, y2)) = self.selection else { return Changes::new(); };
+        let Some(block) = self.copy(doc) else { return Changes::new(); };
+        let max_x = (doc.width as isize - (x2 - x1 + 1) as isize).max(0);
+        let max_y = (doc.height as isize - (y2 - y1 + 1) as isize).max(0);
+        let nx = (x1 as isize + dx).clamp(0, max_x) as usize;
+        let ny = (y1 as isize + dy).clamp(0, max_y) as usize;
+        if (nx, ny) == (x1, y1) { return Changes::new(); }
+        let mut changes = clear_rect(doc, sel);
+        merge_changes(&mut changes, self.paste(doc, &block, nx, ny));
         changes
     }
 

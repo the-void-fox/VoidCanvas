@@ -5,6 +5,7 @@ mod app;
 mod dev;
 mod document;
 mod export;
+mod glyphs;
 mod history;
 mod icons;
 mod tools;

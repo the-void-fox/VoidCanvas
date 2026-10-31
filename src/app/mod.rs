@@ -1,6 +1,7 @@
 use eframe::egui::{self, *};
 
 use crate::document::{Cell, Changes, Document, Layer};
+use crate::glyphs::{Transform, transform_block};
 use crate::history::{Command, History};
 use crate::theme;
 use crate::tools::{
@@ -25,6 +26,8 @@ use crate::ui::{
 
 const APP_NAME: &str = "Void Canvas";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Undo groups of arrow-key moves live apart from typing sessions' groups.
+const NUDGE_GROUPS: u64 = 1 << 63;
 
 pub struct ToolState {
     pub brush:     BrushTool,
@@ -85,6 +88,8 @@ pub struct AsciiArtEditor {
     pub stroke_tool: ToolType,
     /// Changes made so far by the current Select-tool drag.
     pub stroke_changes: Changes,
+    /// Undo group of arrow-key moves; a new one starts with every click on the canvas.
+    nudge_group: u64,
     pub status_msg: String,
     pub status_timer: f32,
     pub show_new_dialog:    bool,
@@ -120,6 +125,7 @@ impl Default for AsciiArtEditor {
             last_primary: true,
             stroke_tool:    ToolType::Brush,
             stroke_changes: Changes::new(),
+            nudge_group:    NUDGE_GROUPS,
             status_msg:  String::from("Ready"),
             status_timer: 0.0,
             show_new_dialog:    false,
@@ -178,6 +184,7 @@ impl AsciiArtEditor {
         match event {
             CanvasEvent::Press { x, y, primary, mods } => {
                 if self.drawing { return; }
+                self.nudge_group += 1;
                 let tool = self.active_tool;
                 self.last_primary = primary;
 
@@ -410,6 +417,27 @@ impl AsciiArtEditor {
             .flat_map(|group| group.iter())
             .filter_map(|&t| Some((Key::from_name(&t.key().to_string())?, t)))
             .collect();
+        let selecting = self.active_tool == ToolType::Select && self.tools.selection.selection.is_some();
+        let (nudge, flip) = ctx.input(|i| {
+            if !selecting || i.modifiers.command || i.modifiers.alt {
+                return ((0, 0), None);
+            }
+            let step = if i.modifiers.shift { 5 } else { 1 };
+            let axis = |minus: Key, plus: Key| {
+                (i.key_pressed(plus) as isize - i.key_pressed(minus) as isize) * step
+            };
+            let flip = if i.key_pressed(Key::H) {
+                Some(Transform::FlipHorizontal)
+            } else if i.key_pressed(Key::V) {
+                Some(Transform::FlipVertical)
+            } else {
+                None
+            };
+            ((axis(Key::ArrowLeft, Key::ArrowRight), axis(Key::ArrowUp, Key::ArrowDown)), flip)
+        });
+        if nudge != (0, 0) && !self.drawing { self.nudge_selection(nudge.0, nudge.1); }
+        if let Some(t) = flip { self.transform_selection(t); }
+
         let (tool, bigger, smaller, swap, delete, deselect) = ctx.input(|i| {
             if i.modifiers.command || i.modifiers.alt {
                 return (None, false, false, false, false, false);
@@ -485,6 +513,28 @@ impl AsciiArtEditor {
         let changes = self.tools.selection.paste(&mut self.doc, &content, x, y);
         self.commit_draw(changes);
         self.show_status("Pasted");
+    }
+
+    /// Mirrors or rotates the selected block, turning glyphs to match.
+    fn transform_selection(&mut self, t: Transform) {
+        if self.tools.selection.selection.is_none() {
+            self.show_status("Nothing selected");
+            return;
+        }
+        if self.drawing || self.active_layer_locked() { return; }
+        let Some(block) = self.tools.selection.copy(&self.doc) else { return };
+        let changes = self.tools.selection.replace(&mut self.doc, &transform_block(&block, t));
+        self.commit_draw(changes);
+    }
+
+    /// Arrow keys: moves the selected block; a run of moves is one undo step.
+    fn nudge_selection(&mut self, dx: isize, dy: isize) {
+        if self.active_layer_locked() { return; }
+        let changes = self.tools.selection.nudge(&mut self.doc, dx, dy);
+        if !changes.is_empty() {
+            self.history.push_grouped(self.doc.active_layer, changes, self.nudge_group);
+            self.doc.modified = true;
+        }
     }
 
     fn delete_selection(&mut self) {

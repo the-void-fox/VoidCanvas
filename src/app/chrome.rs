@@ -3,10 +3,19 @@
 use eframe::egui::{self, *};
 
 use super::{AsciiArtEditor, DockTab, PendingAction};
+use crate::glyphs::Transform;
 use crate::icons;
 use crate::theme;
 use crate::tools::{ToolType, border::BorderStyle};
 use crate::ui::widgets::{self, color_chip, icon_button, icon_toggle, tab_bar, to_hex, vdivider};
+
+/// Selection transforms with their menu label and shortcut.
+const TRANSFORMS: &[(Transform, &str, &str)] = &[
+    (Transform::FlipHorizontal, "Flip Horizontal", "H"),
+    (Transform::FlipVertical, "Flip Vertical", "V"),
+    (Transform::RotateCcw, "Rotate 90° Left", ""),
+    (Transform::RotateCw, "Rotate 90° Right", ""),
+];
 
 impl AsciiArtEditor {
     pub(super) fn menu_bar(&mut self, ui: &mut Ui) {
@@ -58,6 +67,15 @@ impl AsciiArtEditor {
                         if ui.add_enabled(has_selection, Button::new("Delete").shortcut_text("Del")).clicked() {
                             self.delete_selection();
                         }
+                        ui.add_enabled_ui(has_selection, |ui| {
+                            ui.menu_button("Transform", |ui| {
+                                for (t, label, key) in TRANSFORMS {
+                                    if ui.add(Button::new(*label).shortcut_text(*key)).clicked() {
+                                        self.transform_selection(*t);
+                                    }
+                                }
+                            });
+                        });
                         ui.separator();
                         if ui.button("Clear Layer").clicked() { self.clear_layer(); }
                     });
@@ -158,8 +176,23 @@ impl AsciiArtEditor {
                                 let info = format!("{}×{} at {x1}, {y1}", x2 - x1 + 1, y2 - y1 + 1);
                                 ui.label(RichText::new(info).font(theme::mono(12.5)));
                                 vdivider(ui);
+                                for (t, label, key) in TRANSFORMS {
+                                    let icon = match t {
+                                        Transform::FlipHorizontal => icons::FLIP_H,
+                                        Transform::FlipVertical   => icons::FLIP_V,
+                                        Transform::RotateCcw      => icons::ROTATE_LEFT,
+                                        Transform::RotateCw       => icons::ROTATE_RIGHT,
+                                    };
+                                    let tip = if key.is_empty() { label.to_string() } else { format!("{label}  ({key})") };
+                                    if icon_button(ui, icon, 26.0, false, &tip).clicked() {
+                                        self.transform_selection(*t);
+                                    }
+                                }
+                                vdivider(ui);
+                                hint(ui, "Drag inside or use arrows to move · Del clears");
+                            } else {
+                                hint(ui, "Drag to select · Ctrl+A selects all");
                             }
-                            hint(ui, "Drag to select · drag inside to move · Del clears");
                         }
                     }
                     if tool.draws() || tool == ToolType::Eyedropper {

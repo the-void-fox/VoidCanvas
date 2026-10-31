@@ -348,6 +348,52 @@ mod ui {
         assert!([(2, 2), (3, 2), (2, 3)].iter().all(|&(x, y)| glyph_at(&harness, x, y) == ' '));
     }
 
+    fn set_row(harness: &mut Harness<AsciiArtEditor>, x: usize, y: usize, text: &str) {
+        for (i, ch) in text.chars().enumerate() {
+            harness.state_mut().doc.layers[0].set(x + i, y, crate::document::Cell::new(
+                ch, crate::document::Color::WHITE, crate::document::Color::TRANSPARENT,
+            ));
+        }
+    }
+
+    fn row(harness: &Harness<AsciiArtEditor>, x: usize, y: usize, len: usize) -> String {
+        (x..x + len).map(|x| glyph_at(harness, x, y)).collect()
+    }
+
+    #[test]
+    fn flip_turns_glyphs_and_undoes() {
+        let mut harness = harness();
+        set_row(&mut harness, 1, 1, "(>-┌");
+        harness.state_mut().active_tool = ToolType::Select;
+        harness.state_mut().tools.selection.selection = Some((1, 1, 4, 1));
+        harness.key_press(egui::Key::H);
+        harness.step();
+        assert_eq!(row(&harness, 1, 1, 4), "┐-<)");
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::Z);
+        harness.step();
+        assert_eq!(row(&harness, 1, 1, 4), "(>-┌");
+    }
+
+    #[test]
+    fn arrows_move_the_selection_as_one_undo_step() {
+        let mut harness = harness();
+        set_row(&mut harness, 2, 2, "ab");
+        harness.state_mut().active_tool = ToolType::Select;
+        harness.state_mut().tools.selection.selection = Some((2, 2, 3, 2));
+        harness.key_press(egui::Key::ArrowRight);
+        harness.step();
+        harness.key_press_modifiers(Modifiers::SHIFT, egui::Key::ArrowDown);
+        harness.step();
+        assert_eq!(row(&harness, 3, 7, 2), "ab");
+        assert_eq!(row(&harness, 2, 2, 2), "  ");
+        assert_eq!(harness.state().tools.selection.selection, Some((3, 7, 4, 7)));
+
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::Z);
+        harness.step();
+        assert_eq!(row(&harness, 2, 2, 2), "ab");
+        assert_eq!(row(&harness, 3, 7, 2), "  ");
+    }
+
     #[test]
     fn dialogs_and_dock_tabs_render() {
         let mut harness = harness();
@@ -432,6 +478,62 @@ mod stage2_tools {
         history.push(Command::Draw { layer_idx: 0, changes });
         history.undo(&mut doc);
         assert_eq!(doc.layers, original);
+    }
+}
+
+mod glyph_transforms {
+    use super::glyph;
+    use crate::glyphs::{Transform::*, box_arms, from_arms, transform_block, transform_glyph};
+    use crate::ui::char_palette::CATEGORIES;
+
+    fn every_glyph() -> impl Iterator<Item = char> {
+        CATEGORIES.iter().flat_map(|(_, chars)| chars.chars()).chain((0x2500..0x2580).filter_map(char::from_u32))
+    }
+
+    #[test]
+    fn box_arms_identify_one_glyph_each() {
+        for c in (0x2500..0x2580).filter_map(char::from_u32) {
+            if let Some(arms) = box_arms(c) {
+                assert_eq!(from_arms(arms), Some(c), "{c}");
+            }
+        }
+    }
+
+    #[test]
+    fn mirrors_and_rotations_undo_themselves() {
+        for c in every_glyph() {
+            for flip in [FlipHorizontal, FlipVertical] {
+                assert_eq!(transform_glyph(transform_glyph(c, flip), flip), c, "{c} {flip:?}");
+            }
+            assert_eq!(transform_glyph(transform_glyph(c, RotateCw), RotateCcw), c, "{c}");
+            let turned = (0..4).fold(c, |c, _| transform_glyph(c, RotateCw));
+            assert_eq!(turned, c, "{c} four quarter turns");
+        }
+    }
+
+    #[test]
+    fn glyphs_turn_with_the_art() {
+        assert_eq!(transform_glyph('┌', FlipHorizontal), '┐');
+        assert_eq!(transform_glyph('┌', FlipVertical), '└');
+        assert_eq!(transform_glyph('╒', RotateCw), '╖');
+        assert_eq!(transform_glyph('─', RotateCw), '│');
+        assert_eq!(transform_glyph('/', FlipHorizontal), '\\');
+        assert_eq!(transform_glyph('<', RotateCw), '^');
+        assert_eq!(transform_glyph('▌', FlipHorizontal), '▐');
+        assert_eq!(transform_glyph('A', FlipHorizontal), 'A');
+    }
+
+    #[test]
+    fn rotating_a_block_swaps_its_sides() {
+        // a b c        d a
+        // d e f   →    e b
+        //              f c
+        let block: Vec<Vec<_>> = ["abc", "def"].iter().map(|r| r.chars().map(glyph).collect()).collect();
+        let turned = transform_block(&block, RotateCw);
+        let rows: Vec<String> = turned.iter().map(|r| r.iter().map(|c| c.ch).collect()).collect();
+        assert_eq!(rows, ["da", "eb", "fc"]);
+        let back = transform_block(&turned, RotateCcw);
+        assert_eq!(back, block);
     }
 }
 
