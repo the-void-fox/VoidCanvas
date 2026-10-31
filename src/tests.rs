@@ -625,6 +625,49 @@ mod stage3 {
     }
 }
 
+mod shade_brush {
+    use super::{NONE, ctx, red};
+    use crate::document::Document;
+    use crate::tools::shade::{RAMPS, ShadeTool};
+
+    #[test]
+    fn strokes_step_density_once_per_stroke() {
+        let blocks = RAMPS[0].1;
+        let mut doc = Document::new(5, 1);
+        let mut tool = ShadeTool::default();
+        let at = |doc: &Document| doc.layers[0].get(2, 0).unwrap().ch;
+        let darker = ctx('#', red(), NONE);
+
+        tool.on_press(&mut doc, 2, 0, &darker, blocks);
+        tool.on_drag(&mut doc, 3, 0, &darker, blocks);
+        tool.on_drag(&mut doc, 2, 0, &darker, blocks);
+        tool.on_release();
+        assert_eq!(at(&doc), '░', "going back over a cell in the same stroke doesn't stack");
+
+        tool.on_press(&mut doc, 2, 0, &darker, blocks);
+        tool.on_release();
+        assert_eq!(at(&doc), '▒');
+
+        let mut lighter = darker.clone();
+        lighter.is_primary = false;
+        tool.on_press(&mut doc, 2, 0, &lighter, blocks);
+        tool.on_release();
+        assert_eq!(at(&doc), '░');
+    }
+
+    #[test]
+    fn ascii_ramp_tops_out() {
+        let mut doc = Document::new(1, 1);
+        doc.layers[0].set(0, 0, super::glyph('%'));
+        let mut tool = ShadeTool::default();
+        for _ in 0..3 {
+            tool.on_press(&mut doc, 0, 0, &ctx('#', red(), NONE), RAMPS[1].1);
+            tool.on_release();
+        }
+        assert_eq!(doc.layers[0].get(0, 0).unwrap().ch, '@');
+    }
+}
+
 mod box_lines {
     use super::{NONE, ctx, red};
     use crate::document::Document;

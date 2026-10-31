@@ -159,6 +159,8 @@ pub struct ToolOptions {
     pub border_style:  BorderStyle,
     /// The Line tool draws box-drawing lines (in `border_style`) instead of the glyph.
     pub line_box:      bool,
+    /// Index into `shade::RAMPS`.
+    pub shade_ramp:    usize,
     pub channels:      Channels,
     pub mirror:        Mirror,
 }
@@ -170,6 +172,7 @@ impl Default for ToolOptions {
             filled:       false,
             border_style: BorderStyle::Single,
             line_box:     false,
+            shade_ramp:   0,
             channels:     Channels::default(),
             mirror:       Mirror::default(),
         }

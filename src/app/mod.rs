@@ -13,6 +13,7 @@ use crate::tools::{
     selection::{SelectionTool, content_to_text, text_to_content},
     text::TextTool,
     pixel::{PixelTool, halves},
+    shade::{RAMPS, ShadeTool},
 };
 mod chrome;
 mod dialogs;
@@ -20,7 +21,7 @@ mod file_io;
 pub(crate) mod storage;
 
 use crate::ui::{
-    canvas::{CanvasEvent, CanvasState, draw_canvas, shape_mods},
+    canvas::{CanvasEvent, CanvasState, PreviewSettings, draw_canvas, shape_mods},
     char_palette::CharPalette,
     layer_panel::{LayerAction, LayerPanel},
     panels::{ColorPanel, ToolOptions},
@@ -35,6 +36,7 @@ const NUDGE_GROUPS: u64 = 1 << 63;
 pub struct ToolState {
     pub brush:     BrushTool,
     pub pixel:     PixelTool,
+    pub shade:     ShadeTool,
     pub eraser:    EraserTool,
     pub fill:      FillTool,
     pub shape:     ShapeTool,
@@ -234,6 +236,10 @@ impl AsciiArtEditor {
                 match tool {
                     ToolType::Brush  => { self.tools.brush.on_press(&mut self.doc, x, y, &ctx); }
                     ToolType::Pixel  => self.tools.pixel.on_press(&mut self.doc, x, y * 2 + lower as usize, &ctx),
+                    ToolType::Shade  => {
+                        let ramp = self.shade_ramp();
+                        self.tools.shade.on_press(&mut self.doc, x, y, &ctx, ramp);
+                    }
                     ToolType::Eraser => { self.tools.eraser.on_press(&mut self.doc, x, y, &ctx); }
                     ToolType::Select => { self.tools.selection.on_press(&self.doc, x, y); }
                     t if t.is_shape() => self.tools.shape.on_press(x, y),
@@ -247,6 +253,10 @@ impl AsciiArtEditor {
                 match self.stroke_tool {
                     ToolType::Brush  => { self.tools.brush.on_drag(&mut self.doc, x, y, &ctx); }
                     ToolType::Pixel  => self.tools.pixel.on_drag(&mut self.doc, x, y * 2 + lower as usize, &ctx),
+                    ToolType::Shade  => {
+                        let ramp = self.shade_ramp();
+                        self.tools.shade.on_drag(&mut self.doc, x, y, &ctx, ramp);
+                    }
                     ToolType::Eraser => { self.tools.eraser.on_drag(&mut self.doc, x, y, &ctx); }
                     ToolType::Eyedropper => self.pick(x, y, self.last_primary),
                     ToolType::Select => {
@@ -265,6 +275,7 @@ impl AsciiArtEditor {
                 let changes = match self.stroke_tool {
                     ToolType::Brush  => self.tools.brush.on_release(),
                     ToolType::Pixel  => self.tools.pixel.on_release(),
+                    ToolType::Shade  => self.tools.shade.on_release(),
                     ToolType::Eraser => self.tools.eraser.on_release(),
                     ToolType::Select => self.tools.selection.on_release(&mut self.doc),
                     tool => match self.shape_for(tool) {
@@ -279,6 +290,10 @@ impl AsciiArtEditor {
                 self.commit_draw(all, label);
             }
         }
+    }
+
+    fn shade_ramp(&self) -> &'static str {
+        RAMPS[self.tool_options.shade_ramp.min(RAMPS.len() - 1)].1
     }
 
     /// The shape a shape tool draws with the current options.
@@ -812,7 +827,7 @@ impl eframe::App for AsciiArtEditor {
             .frame(egui::Frame::NONE.fill(theme::BG_DEEP))
             .show(ui, |ui| {
                 let ctx_tool = self.draw_context(true);
-                let shape = self.shape_for(self.active_tool);
+                let settings = PreviewSettings { shape: self.shape_for(self.active_tool), ramp: self.shade_ramp() };
                 // Space + drag pans, like in Photoshop.
                 let pan_mode = !self.drawing
                     && !self.typing()
@@ -824,7 +839,7 @@ impl eframe::App for AsciiArtEditor {
                     &mut self.canvas_state,
                     &ctx_tool,
                     self.active_tool,
-                    shape,
+                    settings,
                     pan_mode,
                     &mut self.tools,
                 );

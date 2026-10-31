@@ -139,6 +139,13 @@ pub enum CanvasEvent {
     Release { x: usize, y: usize, mods: Modifiers },
 }
 
+/// Settings of the active tool that its preview depends on.
+#[derive(Clone, Copy)]
+pub struct PreviewSettings {
+    pub shape: Option<Shape>,
+    pub ramp: &'static str,
+}
+
 /// Shift constrains a shape, Alt draws it from the centre.
 pub fn shape_mods(mods: Modifiers) -> ShapeMods {
     ShapeMods { constrain: mods.shift, from_center: mods.alt }
@@ -151,7 +158,7 @@ pub fn draw_canvas(
     state: &mut CanvasState,
     ctx_tool: &DrawContext,
     active_tool: ToolType,
-    shape: Option<Shape>,
+    settings: PreviewSettings,
     pan_mode: bool,
     tools: &mut crate::app::ToolState,
 ) -> Vec<CanvasEvent> {
@@ -221,7 +228,7 @@ pub fn draw_canvas(
 
     let mods = ui.input(|i| i.modifiers);
     if let Some((cx, cy)) = state.cursor_cell.filter(|_| !pan_mode) {
-        let preview = get_preview(active_tool, tools, doc, (cx, cy, state.cursor_lower), ctx_tool, shape, mods);
+        let preview = get_preview(active_tool, tools, doc, (cx, cy, state.cursor_lower), ctx_tool, settings, mods);
         for (px, py, cell) in &preview {
             // Show the result as it will look, with the other layers.
             let cell = doc.composite_with(*px, *py, cell);
@@ -365,12 +372,13 @@ fn get_preview(
     doc: &Document,
     (x, y, lower): (usize, usize, bool),
     ctx: &DrawContext,
-    shape: Option<Shape>,
+    settings: PreviewSettings,
     mods: Modifiers,
 ) -> Vec<(usize, usize, crate::document::Cell)> {
-    match (tool, shape) {
+    match (tool, settings.shape) {
         (ToolType::Brush, _) => tools.brush.preview(doc, x, y, ctx),
         (ToolType::Pixel, _) => tools.pixel.preview(doc, x, y * 2 + lower as usize, ctx),
+        (ToolType::Shade, _) => tools.shade.preview(doc, x, y, ctx, settings.ramp),
         (_, Some(shape)) => tools.shape.preview(doc, shape, (x, y), shape_mods(mods), ctx),
         _ => vec![],
     }

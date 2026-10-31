@@ -5,6 +5,7 @@ pub mod shapes;
 pub mod border;
 pub mod pixel;
 pub mod selection;
+pub mod shade;
 pub mod text;
 
 use crate::document::{Cell, Color, Document};
@@ -15,6 +16,7 @@ pub use crate::document::{Changes, merge_changes};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToolType {
     Brush,
+    Shade,
     Pixel,
     Text,
     Eyedropper,
@@ -32,7 +34,7 @@ impl ToolType {
     pub fn groups() -> &'static [&'static [ToolType]] {
         &[
             &[ToolType::Select],
-            &[ToolType::Brush, ToolType::Pixel, ToolType::Eraser, ToolType::Fill, ToolType::Eyedropper],
+            &[ToolType::Brush, ToolType::Pixel, ToolType::Shade, ToolType::Eraser, ToolType::Fill, ToolType::Eyedropper],
             &[ToolType::Text],
             &[ToolType::Line, ToolType::Rectangle, ToolType::Ellipse, ToolType::Border],
         ]
@@ -51,6 +53,7 @@ impl ToolType {
     pub fn icon(&self) -> &'static str {
         match self {
             ToolType::Brush     => icons::BRUSH,
+            ToolType::Shade     => icons::SHADE,
             ToolType::Pixel     => icons::PIXEL,
             ToolType::Text      => icons::TEXT,
             ToolType::Eyedropper => icons::EYEDROPPER,
@@ -68,6 +71,7 @@ impl ToolType {
     pub fn key(&self) -> char {
         match self {
             ToolType::Brush     => 'B',
+            ToolType::Shade     => 'G',
             ToolType::Pixel     => 'P',
             ToolType::Text      => 'T',
             ToolType::Eyedropper => 'I',
@@ -84,6 +88,7 @@ impl ToolType {
     pub fn name(&self) -> &'static str {
         match self {
             ToolType::Brush     => "Brush",
+            ToolType::Shade     => "Shade",
             ToolType::Pixel     => "Pixel",
             ToolType::Text      => "Text",
             ToolType::Eyedropper => "Eyedropper",

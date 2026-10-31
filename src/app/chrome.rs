@@ -6,7 +6,7 @@ use super::{AsciiArtEditor, DockTab, PendingAction};
 use crate::glyphs::Transform;
 use crate::icons;
 use crate::theme;
-use crate::tools::{ToolType, border::BorderStyle};
+use crate::tools::{ToolType, border::BorderStyle, shade::RAMPS};
 use crate::ui::widgets::{self, color_chip, icon_button, icon_toggle, tab_bar, to_hex, vdivider};
 
 /// Selection transforms with their menu label and shortcut.
@@ -163,7 +163,7 @@ impl AsciiArtEditor {
                     };
                     let options = &mut self.tool_options;
                     match tool {
-                        ToolType::Brush | ToolType::Eraser | ToolType::Pixel => {
+                        ToolType::Brush | ToolType::Eraser | ToolType::Pixel | ToolType::Shade => {
                             ui.label("Size");
                             if icon_button(ui, icons::MINUS, 24.0, false, "Smaller  (-)").clicked() {
                                 options.brush_size = options.brush_size.saturating_sub(1).max(1);
@@ -220,7 +220,20 @@ impl AsciiArtEditor {
                             }
                         }
                     }
-                    if (tool.draws() || tool == ToolType::Eyedropper) && tool != ToolType::Pixel {
+                    if tool == ToolType::Shade {
+                        vdivider(ui);
+                        ui.label("Ramp");
+                        for (i, (name, ramp)) in RAMPS.iter().enumerate() {
+                            let label = format!("{name}  {}", ramp.trim_start());
+                            ui.selectable_value(&mut self.tool_options.shade_ramp, i, label);
+                        }
+                        vdivider(ui);
+                        ui.label("Colour");
+                        let channels = &mut self.tool_options.channels;
+                        ui.toggle_value(&mut channels.fg, "Fore").on_hover_text("Also paint the foreground colour");
+                        ui.toggle_value(&mut channels.bg, "Back").on_hover_text("Also paint the background colour");
+                    }
+                    if (tool.draws() || tool == ToolType::Eyedropper) && !matches!(tool, ToolType::Pixel | ToolType::Shade) {
                         if tool != ToolType::Line {
                             vdivider(ui);
                         }
@@ -240,7 +253,7 @@ impl AsciiArtEditor {
                             ui.toggle_value(on, label).on_hover_text(format!("{verb} {what}"));
                         }
                     }
-                    if tool.is_shape() || matches!(tool, ToolType::Brush | ToolType::Pixel | ToolType::Eraser | ToolType::Fill) {
+                    if tool.is_shape() || matches!(tool, ToolType::Brush | ToolType::Pixel | ToolType::Shade | ToolType::Eraser | ToolType::Fill) {
                         vdivider(ui);
                         let mirror = &mut self.tool_options.mirror;
                         if icon_toggle(ui, icons::FLIP_H, 26.0, mirror.x, "Mirror left ↔ right").clicked() {
@@ -258,6 +271,9 @@ impl AsciiArtEditor {
                         } else {
                             "Shift: square / straight · Alt: from centre"
                         });
+                    } else if tool == ToolType::Shade {
+                        vdivider(ui);
+                        hint(ui, "Each stroke one step denser · right button: lighter");
                     } else if tool == ToolType::Pixel {
                         vdivider(ui);
                         hint(ui, "Square pixels from half blocks · right button: secondary colour · Alt+click: pick");
