@@ -53,6 +53,20 @@ fn glyph_on_upper_layer_keeps_background_below() {
 }
 
 #[test]
+fn background_on_an_upper_layer_goes_behind_the_glyph_below() {
+    // The demo case: mountains on a lower layer, the background painted on the layer above.
+    let mut doc = two_layer_doc();
+    doc.layers[0].set(0, 0, Cell::new('▄', blue(), NONE));
+    doc.active_layer = 1;
+    let mut back_only = ctx('#', Color::WHITE, red());
+    back_only.channels = crate::tools::Channels { glyph: false, fg: false, bg: true };
+    crate::tools::apply_stamps(&mut doc, &[(0, 0, '#')], &back_only);
+
+    let c = doc.composite_cell(0, 0);
+    assert_eq!((c.ch, c.fg, c.bg), ('▄', blue(), red()));
+}
+
+#[test]
 fn merge_down_bakes_into_the_layer_below() {
     let mut doc = two_layer_doc();
     doc.layers[0].set(0, 0, glyph('a'));

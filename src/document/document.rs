@@ -110,6 +110,16 @@ impl Document {
             .fold(Cell::empty(), |below, top| top.over(&below))
     }
 
+    /// What would be visible at (x, y) if the active layer's cell there were `cell` (previews).
+    pub fn composite_with(&self, x: usize, y: usize, cell: &Cell) -> Cell {
+        self.layers
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.visible)
+            .filter_map(|(i, l)| if i == self.active_layer { Some(cell) } else { l.get(x, y) })
+            .fold(Cell::empty(), |below, top| top.over(&below))
+    }
+
     pub fn resize(&mut self, new_w: usize, new_h: usize) {
         for layer in &mut self.layers {
             layer.resize(new_w, new_h);

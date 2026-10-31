@@ -212,6 +212,8 @@ pub fn draw_canvas(
     if let Some((cx, cy)) = state.cursor_cell.filter(|_| !pan_mode) {
         let preview = get_preview(active_tool, tools, doc, cx, cy, ctx_tool, shape, mods);
         for (px, py, cell) in &preview {
+            // Show the result as it will look, with the other layers.
+            let cell = doc.composite_with(*px, *py, cell);
             let rect = snap(state.cell_rect(*px, *py, origin));
             let bg = Color32::from_rgba_unmultiplied(cell.bg.r, cell.bg.g, cell.bg.b, cell.bg.a / 2);
             let fg = Color32::from_rgba_unmultiplied(cell.fg.r, cell.fg.g, cell.fg.b, 180);

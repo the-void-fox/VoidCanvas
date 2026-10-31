@@ -73,16 +73,16 @@ impl Cell {
             && (self.ch == ' ' || self.fg.same_as(&other.fg))
     }
 
-    /// Composites `self` on top of `below`.
-    /// A glyph hides the glyph underneath; an opaque background hides everything underneath.
+    /// Composites `self` on top of `below`. Glyphs and backgrounds stack separately:
+    /// the topmost glyph is drawn over the topmost opaque background, so a background
+    /// painted on any layer goes behind the art instead of covering it.
     pub fn over(&self, below: &Cell) -> Cell {
-        let bg_opaque = !self.bg.is_transparent();
-        let (ch, fg) = if self.ch != ' ' || bg_opaque {
+        let (ch, fg) = if self.ch != ' ' {
             (self.ch, self.fg.clone())
         } else {
             (below.ch, below.fg.clone())
         };
-        let bg = if bg_opaque { self.bg.clone() } else { below.bg.clone() };
+        let bg = if self.bg.is_transparent() { below.bg.clone() } else { self.bg.clone() };
         Cell { ch, fg, bg }
     }
 }
