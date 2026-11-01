@@ -29,7 +29,7 @@ impl AsciiArtEditor {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.button("Create").clicked() {
-                        self.load_document(Document::new(self.new_width, self.new_height));
+                        self.open_in_tab(Document::new(self.new_width, self.new_height));
                         self.show_new_dialog = false;
                     }
                     if ui.button("Cancel").clicked() {
@@ -243,8 +243,7 @@ impl AsciiArtEditor {
 
         let Some(action) = self.pending_action.clone() else { return };
         let what = match action {
-            PendingAction::New  => "creating a new document",
-            PendingAction::Open | PendingAction::OpenPath(_) => "opening another file",
+            PendingAction::CloseTab => "closing it",
             PendingAction::Quit => "quitting",
         };
         let name = self.doc_name();
@@ -283,12 +282,15 @@ impl AsciiArtEditor {
     /// After a crash: offers back the unsaved work found in the autosave.
     pub(super) fn recovery_modal(&mut self, ctx: &egui::Context) {
         let Some(autosave) = &self.recovery else { return };
-        let name = autosave
-            .file_path
-            .as_deref()
-            .and_then(|p| std::path::Path::new(p).file_name())
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Untitled".to_owned());
+        let names: Vec<String> = autosave
+            .documents
+            .iter()
+            .map(|saved| {
+                let name = saved.file_path.as_deref().and_then(|p| std::path::Path::new(p).file_name());
+                format!("\"{}\"", name.map_or_else(|| "Untitled".to_owned(), |n| n.to_string_lossy().to_string()))
+            })
+            .collect();
+        let name = names.join(", ");
         let when = match autosave.age.map(|age| age.as_secs() / 60) {
             Some(0) => "less than a minute ago".to_owned(),
             Some(1) => "a minute ago".to_owned(),
@@ -302,7 +304,7 @@ impl AsciiArtEditor {
             ui.set_width(360.0);
             ui.heading("Recover unsaved work?");
             ui.add_space(6.0);
-            ui.label(format!("Void Canvas didn't close properly. Unsaved changes to \"{name}\" were kept {when}."));
+            ui.label(format!("Void Canvas didn't close properly. Unsaved changes to {name} were kept {when}."));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 if ui.button("Recover").clicked() { recover = Some(true); }
@@ -313,10 +315,12 @@ impl AsciiArtEditor {
         match recover {
             Some(true) => {
                 let autosave = self.recovery.take().unwrap();
-                let mut doc = autosave.document;
-                doc.file_path = autosave.file_path;
-                self.load_document(doc);
-                self.doc.modified = true;
+                for saved in autosave.documents {
+                    let mut doc = saved.document;
+                    doc.file_path = saved.file_path;
+                    doc.modified = true;
+                    self.open_in_tab(doc);
+                }
                 self.show_status("Recovered unsaved work");
             }
             Some(false) => {

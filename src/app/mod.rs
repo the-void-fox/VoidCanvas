@@ -25,6 +25,7 @@ mod file_io;
 mod import;
 pub(crate) mod replace;
 pub(crate) mod storage;
+pub(crate) mod tabs;
 
 use crate::ui::{
     canvas::{CanvasEvent, CanvasState, PreviewSettings, draw_canvas, shape_mods},
@@ -66,11 +67,14 @@ pub enum DockTab {
 /// An action that would throw away unsaved work; it waits for the user's answer.
 #[derive(Clone, PartialEq)]
 pub(crate) enum PendingAction {
-    New,
-    Open,
-    OpenPath(std::path::PathBuf),
+    /// Close the tab in front.
+    CloseTab,
+    /// Close every tab, asking about each unsaved one, then the window.
     Quit,
 }
+
+/// Undo steps kept per document.
+const HISTORY_STEPS: usize = 100;
 
 /// Seconds after an edit before unsaved work is written to the recovery file.
 const AUTOSAVE_DELAY: f64 = 30.0;
@@ -109,7 +113,7 @@ pub struct AsciiArtEditor {
     pub new_height: usize,
     pending_action: Option<PendingAction>,
     /// Set once the user agreed to quit, so the next close request goes through.
-    allow_close: bool,
+    pub(crate) allow_close: bool,
     window_title: String,
     settings: storage::Settings,
     /// Unsaved work from a run that crashed, waiting for "Recover?".
@@ -124,6 +128,9 @@ pub struct AsciiArtEditor {
     pub(crate) file_browser: Option<file_dialog::FileBrowser>,
     /// The command palette, while open.
     pub(crate) command_palette: Option<commands::CommandPalette>,
+    /// One entry per tab; the one in front is `None`, its document lives in the fields above.
+    tabs: Vec<Option<tabs::Tab>>,
+    active_tab: usize,
     /// Folder of the last file chosen; the built-in chooser starts there.
     pub(crate) last_dir: Option<std::path::PathBuf>,
     /// The system file dialog didn't open once, so the built-in one is used from then on.
@@ -138,7 +145,7 @@ impl Default for AsciiArtEditor {
     fn default() -> Self {
         Self {
             doc:          Document::new(80, 40),
-            history:      History::new(100),
+            history:      History::new(HISTORY_STEPS),
             active_tool:  ToolType::Brush,
             tools:        ToolState::default(),
             canvas_state: CanvasState::default(),
@@ -174,6 +181,8 @@ impl Default for AsciiArtEditor {
             banner:         None,
             file_browser:   None,
             command_palette: None,
+            tabs:           vec![None],
+            active_tab:     0,
             last_dir:       None,
             system_dialog_failed: cfg!(test),
             autosaved_version: 0,
@@ -500,6 +509,11 @@ impl AsciiArtEditor {
             i.consume_key(cmd, Key::D),
             i.consume_key(cmd, Key::H),
         ));
+        let (close_tab, prev_tab, next_tab) = ctx.input_mut(|i| (
+            i.consume_key(cmd, Key::W),
+            i.consume_key(cmd_shift, Key::Tab),
+            i.consume_key(cmd, Key::Tab),
+        ));
         if palette { self.run(Action::CommandPalette, ctx); }
         if replace { self.run(Action::Replace, ctx); }
         if select_all { self.run(Action::SelectAll, ctx); }
@@ -520,8 +534,10 @@ impl AsciiArtEditor {
 
         if undo { self.run(Action::Undo, ctx); }
         if redo { self.run(Action::Redo, ctx); }
-        if new { self.request(PendingAction::New, ctx); }
-        if open { self.request(PendingAction::Open, ctx); }
+        if new { self.run(Action::New, ctx); }
+        if open { self.run(Action::Open, ctx); }
+        if close_tab { self.run(Action::CloseTab, ctx); }
+        if prev_tab { self.run(Action::PrevTab, ctx); } else if next_tab { self.run(Action::NextTab, ctx); }
         if save_as { self.choose_file(FileAction::SaveAs { then: None }, ctx); } else if save { self.save(ctx); }
         if zoom_in { self.canvas_state.zoom_view_center(1.25); }
         if zoom_out { self.canvas_state.zoom_view_center(1.0 / 1.25); }
@@ -771,27 +787,16 @@ impl AsciiArtEditor {
     }
 
     /// Replaces the document (new / opened file): fresh history, no selection, canvas re-centred.
-    fn load_document(&mut self, doc: Document) {
-        self.doc = doc;
-        self.history.clear();
-        self.tools.selection.clear();
-        self.canvas_state.request_fit();
-        // The previous document's unsaved work was given up on purpose.
-        storage::Autosave::remove();
-        self.autosaved_version = self.history.version();
-    }
-
     /// Writes unsaved work to the recovery file a little while after it changed.
     fn autosave(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
-        if !self.doc.modified || self.history.version() == self.autosaved_version {
+        if !self.autosave_due() {
             self.last_autosave = now;
             return;
         }
         let due = self.last_autosave + AUTOSAVE_DELAY;
         if now >= due && !self.drawing {
-            storage::Autosave::write(&self.doc);
-            self.autosaved_version = self.history.version();
+            self.refresh_autosave();
             self.last_autosave = now;
         } else {
             ctx.request_repaint_after_secs((due - now).max(0.1) as f32);
@@ -802,11 +807,7 @@ impl AsciiArtEditor {
     fn handle_dropped_files(&mut self, ctx: &egui::Context) {
         let dropped = ctx.input(|i| i.raw.dropped_files.iter().find_map(|f| f.path.clone()));
         if let Some(path) = dropped {
-            if import::is_image(&path) {
-                self.start_image_import(&path);
-            } else {
-                self.request(PendingAction::OpenPath(path), ctx);
-            }
+            self.open_path(&path);
         }
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
             let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("drop_overlay")));
@@ -824,37 +825,38 @@ impl AsciiArtEditor {
 
     // ── Unsaved changes ──────────────────────────────────────────────────────
 
-    /// Runs `action` right away, or asks first if there are unsaved changes.
+    /// Runs `action` right away, or asks first about unsaved changes.
     fn request(&mut self, action: PendingAction, ctx: &egui::Context) {
-        if self.doc.modified {
-            self.pending_action = Some(action);
-        } else {
-            self.perform(action, ctx);
+        match action {
+            PendingAction::CloseTab if self.doc.modified => self.pending_action = Some(action),
+            PendingAction::CloseTab => self.close_front_tab(),
+            PendingAction::Quit => match self.first_unsaved_tab() {
+                Some(i) => {
+                    self.switch_tab(i);
+                    self.pending_action = Some(action);
+                }
+                None => {
+                    self.allow_close = true;
+                    ctx.send_viewport_cmd(ViewportCommand::Close);
+                }
+            },
         }
     }
 
+    /// Carries on with `action` once the unsaved changes in front were saved or given up.
     fn perform(&mut self, action: PendingAction, ctx: &egui::Context) {
-        match action {
-            PendingAction::New => {
-                self.new_width  = self.doc.width;
-                self.new_height = self.doc.height;
-                self.show_new_dialog = true;
-            }
-            PendingAction::Open => self.choose_file(FileAction::Open, ctx),
-            PendingAction::OpenPath(path) => self.open_path(&path),
-            PendingAction::Quit => {
-                self.allow_close = true;
-                ctx.send_viewport_cmd(ViewportCommand::Close);
-            }
+        self.close_front_tab();
+        if action == PendingAction::Quit {
+            self.request(action, ctx);
         }
     }
 
     /// Intercepts closing the window while there are unsaved changes.
     fn handle_close_request(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.viewport().close_requested()) { return; }
-        if !self.allow_close && self.doc.modified {
+        if !self.allow_close && self.first_unsaved_tab().is_some() {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-            self.pending_action = Some(PendingAction::Quit);
+            self.request(PendingAction::Quit, ctx);
         } else {
             // A clean exit: nothing to recover next time.
             storage::Autosave::remove();
@@ -862,11 +864,7 @@ impl AsciiArtEditor {
     }
 
     fn doc_name(&self) -> String {
-        self.doc.file_path
-            .as_deref()
-            .and_then(|p| std::path::Path::new(p).file_name())
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Untitled".to_string())
+        tabs::display_name(&self.doc)
     }
 
     fn update_title(&mut self, ctx: &egui::Context) {
@@ -921,6 +919,7 @@ impl eframe::App for AsciiArtEditor {
         self.status_bar(ui);
         self.tool_strip(ui);
         self.dock(ui);
+        self.tab_bar(ui);
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(theme::BG_DEEP))

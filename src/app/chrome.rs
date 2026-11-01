@@ -2,7 +2,7 @@
 
 use eframe::egui::{self, *};
 
-use super::{AsciiArtEditor, DockTab, PendingAction, commands::Action, file_dialog::FileAction};
+use super::{AsciiArtEditor, DockTab, commands::Action, file_dialog::FileAction};
 use crate::glyphs::Transform;
 use crate::icons;
 use crate::theme;
@@ -28,12 +28,8 @@ impl AsciiArtEditor {
                     ui.add_space(2.0);
 
                     ui.menu_button("File", |ui| {
-                        if ui.add(Button::new("New…").shortcut_text("Ctrl+N")).clicked() {
-                            self.request(PendingAction::New, &ctx);
-                        }
-                        if ui.add(Button::new("Open…").shortcut_text("Ctrl+O")).clicked() {
-                            self.request(PendingAction::Open, &ctx);
-                        }
+                        if ui.add(Button::new("New…").shortcut_text("Ctrl+N")).clicked() { self.run(Action::New, &ctx); }
+                        if ui.add(Button::new("Open…").shortcut_text("Ctrl+O")).clicked() { self.run(Action::Open, &ctx); }
                         ui.menu_button("Open Recent", |ui| {
                             if self.settings.recent_files.is_empty() {
                                 ui.label(RichText::new("No recent files").color(theme::TEXT_FAINT));
@@ -43,7 +39,7 @@ impl AsciiArtEditor {
                                     .file_name()
                                     .map_or_else(|| path.clone(), |n| n.to_string_lossy().to_string());
                                 if ui.button(name).on_hover_text(&path).clicked() {
-                                    self.request(PendingAction::OpenPath(path.into()), &ctx);
+                                    self.run(Action::OpenRecent(path), &ctx);
                                 }
                             }
                             if !self.settings.recent_files.is_empty() {
@@ -64,7 +60,8 @@ impl AsciiArtEditor {
                         if ui.button("Export PNG…").clicked() { self.choose_file(FileAction::ExportPng { transparent: false }, &ctx); }
                         if ui.button("Export PNG (Transparent)…").clicked() { self.choose_file(FileAction::ExportPng { transparent: true }, &ctx); }
                         ui.separator();
-                        if ui.button("Quit").clicked() { self.request(PendingAction::Quit, &ctx); }
+                        if ui.add(Button::new("Close Tab").shortcut_text("Ctrl+W")).clicked() { self.run(Action::CloseTab, &ctx); }
+                        if ui.button("Quit").clicked() { self.run(Action::Quit, &ctx); }
                     });
 
                     ui.menu_button("Edit", |ui| {

@@ -92,12 +92,18 @@ impl Settings {
     }
 }
 
-/// Unsaved work written in the background, offered back after a crash.
+/// One document kept by the autosave.
 #[derive(Serialize, Deserialize)]
-pub struct Autosave {
+pub struct SavedDocument {
     /// The file the document belongs to, if it was ever saved.
     pub file_path: Option<String>,
     pub document: Document,
+}
+
+/// Unsaved work of every open document, written in the background and offered back after a crash.
+#[derive(Serialize, Deserialize)]
+pub struct Autosave {
+    pub documents: Vec<SavedDocument>,
     /// How long ago it was written (filled in when loading).
     #[serde(skip)]
     pub age: Option<Duration>,
@@ -108,8 +114,16 @@ impl Autosave {
         config_dir().map(|dir| dir.join("autosave.vc"))
     }
 
-    pub fn write(doc: &Document) {
-        let autosave = Autosave { file_path: doc.file_path.clone(), document: doc.clone(), age: None };
+    /// Keeps `docs`, or removes the recovery file when there is nothing unsaved.
+    pub fn write(docs: &[&Document]) {
+        if docs.is_empty() {
+            return Self::remove();
+        }
+        let documents = docs
+            .iter()
+            .map(|doc| SavedDocument { file_path: doc.file_path.clone(), document: (*doc).clone() })
+            .collect();
+        let autosave = Autosave { documents, age: None };
         if let (Some(path), Ok(data)) = (Self::path(), serde_json::to_string(&autosave)) {
             let _ = write_atomically(&path, &data);
         }
@@ -119,8 +133,15 @@ impl Autosave {
     pub fn load() -> Option<Self> {
         let path = Self::path()?;
         let data = std::fs::read_to_string(&path).ok()?;
-        let mut autosave: Autosave = serde_json::from_str(&data).ok()?;
-        autosave.document.validate().ok()?;
+        // Before tabs, the file held a single document.
+        let mut autosave = serde_json::from_str::<Autosave>(&data).ok().or_else(|| {
+            let single = serde_json::from_str::<SavedDocument>(&data).ok()?;
+            Some(Autosave { documents: vec![single], age: None })
+        })?;
+        autosave.documents.retain_mut(|saved| saved.document.validate().is_ok());
+        if autosave.documents.is_empty() {
+            return None;
+        }
         autosave.age = std::fs::metadata(&path)
             .and_then(|m| m.modified())
             .ok()

@@ -40,7 +40,7 @@ impl AsciiArtEditor {
                 self.settings.add_recent(&path);
                 self.doc.file_path = Some(path);
                 self.doc.modified = false;
-                storage::Autosave::remove();
+                self.refresh_autosave();
                 self.autosaved_version = self.history.version();
                 self.show_status(format!("Saved: {}", self.doc_name()));
                 true
@@ -60,6 +60,11 @@ impl AsciiArtEditor {
             return;
         }
         let shown = path.to_string_lossy().to_string();
+        if let Some(tab) = self.tab_with_file(&shown) {
+            self.switch_tab(tab);
+            self.show_status(format!("{} is already open", self.doc_name()));
+            return;
+        }
         let data = match std::fs::read_to_string(path) {
             Ok(data) => data,
             Err(e) => {
@@ -84,7 +89,7 @@ impl AsciiArtEditor {
             return;
         }
         doc.file_path = Some(shown.clone());
-        self.load_document(doc);
+        self.open_in_tab(doc);
         self.settings.add_recent(&shown);
         self.show_status(format!("Opened: {}", self.doc_name()));
     }
@@ -103,7 +108,7 @@ impl AsciiArtEditor {
             }
         }
         doc.modified = true;
-        self.load_document(doc);
+        self.open_in_tab(doc);
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let clipped = if block.len() > MAX || block.first().is_some_and(|r| r.len() > MAX) { " (clipped)" } else { "" };
         self.show_status(format!("Imported {name}: {width}×{height}{clipped}"));

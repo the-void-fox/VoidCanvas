@@ -519,13 +519,16 @@ mod ui {
     }
 
     #[test]
-    fn recovering_an_autosave_restores_the_document() {
+    fn recovering_an_autosave_restores_every_document() {
+        use crate::app::storage::{Autosave, SavedDocument};
         let mut doc = crate::document::Document::new(5, 2);
         doc.layers[0].set(1, 1, crate::document::Cell::new('R', crate::document::Color::WHITE, crate::document::Color::TRANSPARENT));
         let mut harness = harness();
-        harness.state_mut().recovery = Some(crate::app::storage::Autosave {
-            file_path: Some("/art/lost.vc".into()),
-            document: doc,
+        harness.state_mut().recovery = Some(Autosave {
+            documents: vec![
+                SavedDocument { file_path: Some("/art/lost.vc".into()), document: doc },
+                SavedDocument { file_path: None, document: crate::document::Document::new(3, 3) },
+            ],
             age: None,
         });
         // The modal measures itself in its first frame.
@@ -537,9 +540,13 @@ mod ui {
 
         let app = harness.state();
         assert!(app.recovery.is_none());
+        assert_eq!(app.tab_count(), 2, "the empty start-up document gave its tab up");
+        assert_eq!((app.doc.width, app.doc.height), (3, 3));
+        harness.state_mut().switch_tab(0);
+        let app = harness.state();
         assert_eq!((app.doc.width, app.doc.height), (5, 2));
         assert_eq!(glyph_at(&harness, 1, 1), 'R');
-        assert!(app.doc.modified, "recovered work is still unsaved");
+        assert!(app.documents().all(|doc| doc.modified), "recovered work is still unsaved");
         assert_eq!(app.doc.file_path.as_deref(), Some("/art/lost.vc"));
     }
 
@@ -742,14 +749,15 @@ mod ui {
     }
 
     #[test]
-    fn saving_before_opening_continues_to_the_open_chooser() {
-        let dir = temp_folder("save-then-open");
+    fn saving_before_closing_a_tab_goes_through_the_chooser() {
+        let dir = temp_folder("save-then-close");
         let mut harness = harness();
         harness.state_mut().last_dir = Some(dir.clone());
+        harness.state_mut().open_in_tab(crate::document::Document::new(4, 4));
         set_row(&mut harness, 0, 0, "x");
         harness.state_mut().doc.modified = true;
 
-        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::O);
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::W);
         harness.step();
         harness.step();
         harness.get_by_label("Save").click(); // in "Unsaved changes"
@@ -759,9 +767,69 @@ mod ui {
         harness.step();
 
         assert!(dir.join("Untitled.vc").is_file());
-        let browser = harness.state().file_browser.as_ref().expect("Open comes next");
-        assert!(browser.action == crate::app::FileAction::Open);
+        let app = harness.state();
+        assert_eq!(app.tab_count(), 1, "the tab closed once it was saved");
+        assert_eq!((app.doc.width, app.doc.height), (80, 40));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn write_doc(path: &std::path::Path, ch: char) {
+        let mut doc = crate::document::Document::new(6, 2);
+        doc.layers[0].set(0, 0, crate::document::Cell::new(ch, crate::document::Color::WHITE, crate::document::Color::TRANSPARENT));
+        std::fs::write(path, serde_json::to_string(&doc).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn files_open_in_tabs_with_their_own_history() {
+        let dir = temp_folder("tabs");
+        let (a, b) = (dir.join("a.vc"), dir.join("b.vc"));
+        write_doc(&a, 'A');
+        write_doc(&b, 'B');
+        let mut harness = harness();
+        harness.state_mut().open_path(&a);
+        harness.state_mut().open_path(&b);
+        harness.step();
+        assert_eq!(harness.state().tab_count(), 2, "the untouched start-up tab was reused");
+        assert_eq!(glyph_at(&harness, 0, 0), 'B');
+
+        let z = crate::document::Cell::new('z', crate::document::Color::WHITE, crate::document::Color::TRANSPARENT);
+        let changes = crate::document::Changes::from([((1, 1), (crate::document::Cell::empty(), z))]);
+        let app = harness.state_mut();
+        app.history.execute(crate::history::Command::Draw { layer_idx: 0, changes }, &mut app.doc);
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::Tab);
+        harness.step();
+        assert_eq!(glyph_at(&harness, 0, 0), 'A');
+        assert!(!harness.state().history.can_undo(), "each tab has its own history");
+
+        harness.state_mut().open_path(&b);
+        harness.step();
+        let app = harness.state();
+        assert_eq!((app.tab_count(), app.active_tab()), (2, 1), "an open file isn't opened twice");
+        assert!(app.history.can_undo());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn quitting_asks_about_each_unsaved_tab() {
+        let mut harness = harness();
+        harness.state_mut().doc.modified = true;
+        harness.state_mut().open_in_tab(crate::document::Document::new(4, 4));
+        harness.state_mut().open_in_tab(crate::document::Document::new(5, 5));
+        harness.state_mut().doc.modified = true;
+        harness.state_mut().switch_tab(1);
+
+        let ctx = harness.ctx.clone();
+        harness.state_mut().run(crate::app::commands::Action::Quit, &ctx);
+        for _ in 0..2 {
+            harness.step();
+            harness.step();
+            assert!(harness.state().doc.modified, "an unsaved tab is in front while asked about");
+            harness.get_by_label("Don't Save").click();
+            harness.step();
+        }
+        let app = harness.state();
+        assert!(app.allow_close, "nothing unsaved is left, so the window closes");
+        assert_eq!(app.tab_count(), 1, "the clean tab was never asked about");
     }
 
     #[test]

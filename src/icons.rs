@@ -39,6 +39,7 @@ pub const GRID: &str = "\u{F02C1}";
 pub const GRID_OFF: &str = "\u{F02C2}";
 pub const SEARCH: &str = "\u{F0349}";
 pub const FOLDER: &str = "\u{F024B}";
+pub const CLOSE: &str = "\u{F0156}";
 pub const FILE: &str = "\u{F0224}";
 pub const PALETTE: &str = "\u{F03D8}";
 pub const GLYPHS: &str = "\u{F0B34}";

@@ -17,6 +17,10 @@ pub enum Action {
     /// Save As, Import Image and the exports: a file is chosen first.
     ChooseFile(FileAction),
     Quit,
+    CloseTab,
+    NextTab,
+    PrevTab,
+    SwitchTab(usize),
     Undo,
     Redo,
     Copy,
@@ -91,7 +95,17 @@ impl AsciiArtEditor {
         add("File", "Export HTML…", "", Action::ChooseFile(FileAction::ExportHtml));
         add("File", "Export PNG…", "", Action::ChooseFile(FileAction::ExportPng { transparent: false }));
         add("File", "Export PNG (Transparent)…", "", Action::ChooseFile(FileAction::ExportPng { transparent: true }));
+        add("File", "Close Tab", "Ctrl+W", Action::CloseTab);
         add("File", "Quit", "", Action::Quit);
+        if self.tab_count() > 1 {
+            add("Tab", "Next Tab", "Ctrl+Tab", Action::NextTab);
+            add("Tab", "Previous Tab", "Ctrl+Shift+Tab", Action::PrevTab);
+            let names: Vec<String> = self.documents().map(super::tabs::display_name).collect();
+            for (i, name) in names.iter().enumerate() {
+                // Two tabs can share a name; the number tells them apart.
+                if i != self.active_tab() { add("Tab", &format!("{name}  #{}", i + 1), "", Action::SwitchTab(i)); }
+            }
+        }
 
         if self.history.can_undo() { add("Edit", "Undo", "Ctrl+Z", Action::Undo); }
         if self.history.can_redo() { add("Edit", "Redo", "Ctrl+Y", Action::Redo); }
@@ -148,14 +162,22 @@ impl AsciiArtEditor {
         list
     }
 
-    pub(super) fn run(&mut self, action: Action, ctx: &egui::Context) {
+    pub(crate) fn run(&mut self, action: Action, ctx: &egui::Context) {
         match action {
-            Action::New => self.request(PendingAction::New, ctx),
-            Action::Open => self.request(PendingAction::Open, ctx),
-            Action::OpenRecent(path) => self.request(PendingAction::OpenPath(path.into()), ctx),
+            Action::New => {
+                self.new_width  = self.doc.width;
+                self.new_height = self.doc.height;
+                self.show_new_dialog = true;
+            }
+            Action::Open => self.choose_file(FileAction::Open, ctx),
+            Action::OpenRecent(path) => self.open_path(std::path::Path::new(&path)),
             Action::Save => self.save(ctx),
             Action::ChooseFile(file) => self.choose_file(file, ctx),
             Action::Quit => self.request(PendingAction::Quit, ctx),
+            Action::CloseTab => self.request(PendingAction::CloseTab, ctx),
+            Action::NextTab => self.cycle_tab(1),
+            Action::PrevTab => self.cycle_tab(-1),
+            Action::SwitchTab(i) => self.switch_tab(i),
             Action::Undo => {
                 if !self.drawing && self.history.undo(&mut self.doc) { self.show_status("Undo"); }
             }

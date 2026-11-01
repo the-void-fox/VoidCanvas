@@ -121,13 +121,6 @@ impl History {
         while self.undo_stack.len() > applied && self.undo(doc) {}
         while self.undo_stack.len() < applied && self.redo(doc) {}
     }
-
-    pub fn clear(&mut self) {
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-        self.open_group = None;
-        self.version += 1;
-    }
 }
 
 // Undo / redo write through `Layer::put`, so they work on locked layers too.
