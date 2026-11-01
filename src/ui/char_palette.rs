@@ -1,6 +1,7 @@
 use egui::*;
 use crate::icons;
 use crate::theme;
+use crate::ui::{glyph_render, widgets::section_label};
 
 pub const CATEGORIES: &[(&str, &str)] = &[
     ("Basic",
@@ -29,6 +30,12 @@ pub const CATEGORIES: &[(&str, &str)] = &[
      "☀☁☂☃★☆☉☐☑☒☺☻☹☠☢☣☭☮☯♠♡♢♣♤♥♦♧♨♪♫♩♬♀♂⚤⚥⚧⚨⚩⚫⚪⚰⚱⚲⚠⚡⌂⌐⌘⌥⌫⌦⌧⌨⏎⏏©®™"),
     ("Currency",
      "$¢£¤¥€₠₡₢₣₤₥₦₧₨₩₪₫₭₮₯₰₱₲₳₴₵₶₷₸₹₺₻₼₽₾"),
+    ("Box",
+     "─━│┃┄┅┆┇┈┉┊┋┌┍┎┏┐┑┒┓└┕┖┗┘┙┚┛├┝┞┟┠┡┢┣┤┥┦┧┨┩┪┫┬┭┮┯┰┱┲┳┴┵┶┷┸┹┺┻┼┽┾┿╀╁╂╃╄╅╆╇╈╉╊╋╌╍╎╏═║╒╓╔╕╖╗╘╙╚╛╜╝╞╟╠╡╢╣╤╥╦╧╨╩╪╫╬╭╮╯╰╱╲╳╴╵╶╷╸╹╺╻╼╽╾╿"),
+    ("Braille",
+     "⠀⠁⠂⠃⠄⠅⠆⠇⠈⠉⠊⠋⠌⠍⠎⠏⠐⠑⠒⠓⠔⠕⠖⠗⠘⠙⠚⠛⠜⠝⠞⠟⠠⠡⠢⠣⠤⠥⠦⠧⠨⠩⠪⠫⠬⠭⠮⠯⠰⠱⠲⠳⠴⠵⠶⠷⠸⠹⠺⠻⠼⠽⠾⠿⡀⡁⡂⡃⡄⡅⡆⡇⡈⡉⡊⡋⡌⡍⡎⡏⡐⡑⡒⡓⡔⡕⡖⡗⡘⡙⡚⡛⡜⡝⡞⡟⡠⡡⡢⡣⡤⡥⡦⡧⡨⡩⡪⡫⡬⡭⡮⡯⡰⡱⡲⡳⡴⡵⡶⡷⡸⡹⡺⡻⡼⡽⡾⡿⢀⢁⢂⢃⢄⢅⢆⢇⢈⢉⢊⢋⢌⢍⢎⢏⢐⢑⢒⢓⢔⢕⢖⢗⢘⢙⢚⢛⢜⢝⢞⢟⢠⢡⢢⢣⢤⢥⢦⢧⢨⢩⢪⢫⢬⢭⢮⢯⢰⢱⢲⢳⢴⢵⢶⢷⢸⢹⢺⢻⢼⢽⢾⢿⣀⣁⣂⣃⣄⣅⣆⣇⣈⣉⣊⣋⣌⣍⣎⣏⣐⣑⣒⣓⣔⣕⣖⣗⣘⣙⣚⣛⣜⣝⣞⣟⣠⣡⣢⣣⣤⣥⣦⣧⣨⣩⣪⣫⣬⣭⣮⣯⣰⣱⣲⣳⣴⣵⣶⣷⣸⣹⣺⣻⣼⣽⣾⣿"),
+    ("Sextants",
+     "🬀🬁🬂🬃🬄🬅🬆🬇🬈🬉🬊🬋🬌🬍🬎🬏🬐🬑🬒🬓🬔🬕🬖🬗🬘🬙🬚🬛🬜🬝🬞🬟🬠🬡🬢🬣🬤🬥🬦🬧🬨🬩🬪🬫🬬🬭🬮🬯🬰🬱🬲🬳🬴🬵🬶🬷🬸🬹🬺🬻"),
     ("Progress",
      "█▇▆▅▄▃▂▁▉▊▋▌▍▎▏░▒▓"),
     ("Nerd Dev",
@@ -86,9 +93,18 @@ fn parse_code_point(query: &str) -> Option<char> {
 pub struct CharPalette {
     pub category: usize,
     pub search: String,
+    /// Recently used glyphs, newest first.
+    pub recent: Vec<char>,
 }
 
 impl CharPalette {
+    pub fn remember(&mut self, ch: char) {
+        if ch == ' ' { return; }
+        self.recent.retain(|&c| c != ch);
+        self.recent.insert(0, ch);
+        self.recent.truncate(16);
+    }
+
     /// Left click picks the primary glyph, right click the secondary one.
     pub fn show(&mut self, ui: &mut Ui, primary_char: &mut char, secondary_char: &mut char) {
         ui.add(
@@ -110,6 +126,35 @@ impl CharPalette {
                 });
         }
 
+        const CELL: f32 = 30.0;
+        const GAP: f32 = 4.0;
+        let cols = (((ui.available_width() + GAP) / (CELL + GAP)) as usize).max(1);
+        let mut tiles = |ui: &mut Ui, chars: &[char]| {
+            for row in chars.chunks(cols) {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(GAP, GAP);
+                    for &ch in row {
+                        let resp = glyph_cell(ui, ch, CELL, ch == *primary_char, ch == *secondary_char);
+                        if resp.clicked() {
+                            *primary_char = ch;
+                        }
+                        if resp.secondary_clicked() {
+                            *secondary_char = ch;
+                        }
+                    }
+                });
+            }
+        };
+
+        if !searching && !self.recent.is_empty() {
+            ui.add_space(2.0);
+            section_label(ui, "Recent");
+            let recent: Vec<char> = self.recent.iter().take(cols).copied().collect();
+            tiles(ui, &recent);
+            ui.add_space(2.0);
+            section_label(ui, CATEGORIES[self.category].0);
+        }
+
         let chars: Vec<char> = if searching {
             search(&self.search)
         } else {
@@ -121,23 +166,7 @@ impl CharPalette {
         }
 
         ui.add_space(4.0);
-        const CELL: f32 = 30.0;
-        const GAP: f32 = 4.0;
-        let cols = (((ui.available_width() + GAP) / (CELL + GAP)) as usize).max(1);
-        for row in chars.chunks(cols) {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing = vec2(GAP, GAP);
-                for &ch in row {
-                    let resp = glyph_cell(ui, ch, CELL, ch == *primary_char, ch == *secondary_char);
-                    if resp.clicked() {
-                        *primary_char = ch;
-                    }
-                    if resp.secondary_clicked() {
-                        *secondary_char = ch;
-                    }
-                }
-            });
-        }
+        tiles(ui, &chars);
     }
 }
 
@@ -158,7 +187,12 @@ fn glyph_cell(ui: &mut Ui, ch: char, size: f32, primary: bool, secondary: bool) 
             ui.painter().rect_stroke(rect, 5.0, Stroke::new(1.5, theme::ACCENT), StrokeKind::Inside);
         }
         let fg = if primary { Color32::WHITE } else { theme::TEXT };
-        ui.painter().text(rect.center(), Align2::CENTER_CENTER, ch, theme::mono(17.0), fg);
+        // Box, block and braille glyphs as on the canvas (the font lacks some of them).
+        let ppp = ui.ctx().pixels_per_point();
+        let glyph = glyph_render::snap_rect(Rect::from_center_size(rect.center(), vec2(size * 0.4, size * 0.8)), ppp);
+        if !glyph_render::draw(ui.painter(), ch, glyph, fg, glyph_render::Strokes::new(glyph.width(), ppp)) {
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, ch, theme::mono(17.0), fg);
+        }
     }
     resp
 }

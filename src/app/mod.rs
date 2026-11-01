@@ -226,6 +226,9 @@ impl AsciiArtEditor {
                 let edits = tool != ToolType::Select || self.tools.selection.hit(x, y);
                 if edits && self.active_layer_locked() { return; }
                 let ctx = self.draw_context(primary);
+                if tool.draws() && tool != ToolType::Eraser {
+                    self.remember_used(&ctx);
+                }
 
                 if tool == ToolType::Fill {
                     let changes = self.tools.fill.flood_fill(&mut self.doc, x, y, &ctx);
@@ -311,6 +314,20 @@ impl AsciiArtEditor {
             ToolType::Border    => Shape::Border(options.border_style),
             _ => return None,
         })
+    }
+
+    /// Puts what a stroke paints with into the Recent rows of the dock.
+    fn remember_used(&mut self, ctx: &DrawContext) {
+        let channels = ctx.channels;
+        if channels.glyph && !matches!(self.active_tool, ToolType::Pixel | ToolType::Shade) {
+            self.char_palette.remember(ctx.current_char());
+        }
+        if channels.fg || self.active_tool == ToolType::Pixel {
+            self.color_panel.remember(&ctx.current_fg());
+        }
+        if channels.bg && self.active_tool != ToolType::Pixel {
+            self.color_panel.remember(&ctx.current_bg());
+        }
     }
 
     /// Alt+click with the Pixel tool: picks the colour of the half-block pixel.

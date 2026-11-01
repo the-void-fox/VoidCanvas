@@ -24,12 +24,40 @@ impl ColorSlot {
     }
 }
 
-/// 16 VGA colours and a grey ramp.
-const PALETTE: [(u8, u8, u8); 24] = [
-    (0, 0, 0), (170, 0, 0), (0, 170, 0), (170, 85, 0), (0, 0, 170), (170, 0, 170), (0, 170, 170), (170, 170, 170),
-    (85, 85, 85), (255, 85, 85), (85, 255, 85), (255, 255, 85), (85, 85, 255), (255, 85, 255), (85, 255, 255), (255, 255, 255),
-    (18, 18, 24), (38, 38, 50), (64, 64, 80), (96, 96, 118), (128, 128, 148), (167, 139, 250), (124, 77, 255), (228, 228, 238),
-];
+/// Named swatch sets for the Colors panel.
+pub const PALETTES: [&str; 6] = ["VGA", "xterm 256", "PICO-8", "Game Boy", "Greys", "Void"];
+
+/// The colours of palette `index` (see [`PALETTES`]).
+pub fn palette(index: usize) -> Vec<Color32> {
+    let hex = |list: &[u32]| list.iter().map(|&c| Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)).collect();
+    match index {
+        0 => hex(&[
+            0x000000, 0xAA0000, 0x00AA00, 0xAA5500, 0x0000AA, 0xAA00AA, 0x00AAAA, 0xAAAAAA,
+            0x555555, 0xFF5555, 0x55FF55, 0xFFFF55, 0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF,
+        ]),
+        1 => {
+            // xterm: 16 system colours, a 6×6×6 cube and 24 greys.
+            let mut colors: Vec<Color32> = hex(&[
+                0x000000, 0x800000, 0x008000, 0x808000, 0x000080, 0x800080, 0x008080, 0xC0C0C0,
+                0x808080, 0xFF0000, 0x00FF00, 0xFFFF00, 0x0000FF, 0xFF00FF, 0x00FFFF, 0xFFFFFF,
+            ]);
+            const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+            for r in LEVELS { for g in LEVELS { for b in LEVELS { colors.push(Color32::from_rgb(r, g, b)); } } }
+            colors.extend((0..24).map(|i| Color32::from_gray(8 + 10 * i)));
+            colors
+        }
+        2 => hex(&[
+            0x000000, 0x1D2B53, 0x7E2553, 0x008751, 0xAB5236, 0x5F574F, 0xC2C3C7, 0xFFF1E8,
+            0xFF004D, 0xFFA300, 0xFFEC27, 0x00E436, 0x29ADFF, 0x83769C, 0xFF77A8, 0xFFCCAA,
+        ]),
+        3 => hex(&[0x0F380F, 0x306230, 0x8BAC0F, 0x9BBC0F]),
+        4 => (0..16).map(|i| Color32::from_gray(i * 17)).collect(),
+        _ => hex(&[
+            0x0B0B0F, 0x121218, 0x26263A, 0x3A2668, 0x7C4DFF, 0xA78BFA, 0xC4B5FD, 0xE4E4EE,
+            0x78DCE6, 0xF5E6A8, 0xFBBF24, 0xF87171,
+        ]),
+    }
+}
 
 pub struct ColorPanel {
     pub primary_fg:   Color,
@@ -39,6 +67,10 @@ pub struct ColorPanel {
     /// The slot the picker and the palette edit.
     pub slot: ColorSlot,
     hex: String,
+    /// Index into [`PALETTES`].
+    pub palette: usize,
+    /// Recently used colours, newest first.
+    pub recent: Vec<Color>,
 }
 
 impl Default for ColorPanel {
@@ -50,6 +82,8 @@ impl Default for ColorPanel {
             secondary_bg: Color::TRANSPARENT,
             slot:         ColorSlot::PrimaryFg,
             hex:          String::new(),
+            palette:      0,
+            recent:       Vec::new(),
         }
     }
 }
@@ -71,6 +105,13 @@ impl ColorPanel {
             ColorSlot::SecondaryFg => &mut self.secondary_fg,
             ColorSlot::SecondaryBg => &mut self.secondary_bg,
         } = color;
+    }
+
+    pub fn remember(&mut self, color: &Color) {
+        if color.is_transparent() { return; }
+        self.recent.retain(|c| c != color);
+        self.recent.insert(0, color.clone());
+        self.recent.truncate(16);
     }
 
     pub fn swap(&mut self) {
@@ -135,16 +176,39 @@ impl ColorPanel {
             }
         });
 
+        if !self.recent.is_empty() {
+            ui.add_space(6.0);
+            section_label(ui, "Recent");
+            let recent: Vec<Color32> = self.recent.iter().map(Color::to_egui).collect();
+            self.swatches(ui, &recent, 22.0);
+        }
+
         ui.add_space(6.0);
-        section_label(ui, "Palette");
-        let size = vec2(22.0, 22.0);
-        for row in PALETTE.chunks(8) {
+        ui.horizontal(|ui| {
+            section_label(ui, "Palette");
+            ComboBox::from_id_salt("palette")
+                .selected_text(PALETTES[self.palette])
+                .show_ui(ui, |ui| {
+                    for (i, name) in PALETTES.iter().enumerate() {
+                        ui.selectable_value(&mut self.palette, i, *name);
+                    }
+                });
+        });
+        let colors = palette(self.palette);
+        let size = if colors.len() > 32 { 15.0 } else { 22.0 };
+        self.swatches(ui, &colors, size);
+    }
+
+    /// Clickable colour chips in rows; a click puts the colour into the selected slot.
+    fn swatches(&mut self, ui: &mut Ui, colors: &[Color32], size: f32) {
+        let gap = if size < 20.0 { 2.0 } else { 5.0 };
+        let per_row = (((ui.available_width() + gap) / (size + gap)) as usize).max(1);
+        for row in colors.chunks(per_row) {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 5.0;
-                for &(r, g, b) in row {
-                    let c = Color32::from_rgb(r, g, b);
-                    if color_chip(ui, c, size, false).on_hover_text(to_hex(c)).clicked() {
-                        self.set(self.slot, Color::new(r, g, b, 255));
+                ui.spacing_mut().item_spacing = vec2(gap, gap);
+                for &c in row {
+                    if color_chip(ui, c, vec2(size, size), false).on_hover_text(to_hex(c)).clicked() {
+                        self.set(self.slot, Color::from_egui(c));
                     }
                 }
             });

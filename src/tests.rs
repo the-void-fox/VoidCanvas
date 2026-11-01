@@ -268,6 +268,22 @@ mod ui {
     }
 
     #[test]
+    fn painting_remembers_glyph_and_colour() {
+        let mut harness = harness();
+        harness.state_mut().primary_char = '@';
+        harness.state_mut().color_panel.primary_fg = crate::document::Color::new(1, 2, 3, 255);
+        let pos = cell_pos(&harness, 1, 1);
+        harness.hover_at(pos);
+        harness.step();
+        harness.event(button(pos, true));
+        harness.event(button(pos, false));
+        harness.step();
+        let app = harness.state();
+        assert_eq!(app.char_palette.recent.first(), Some(&'@'));
+        assert_eq!(app.color_panel.recent.first(), Some(&crate::document::Color::new(1, 2, 3, 255)));
+    }
+
+    #[test]
     fn a_tap_within_one_frame_paints() {
         let mut harness = harness();
         let pos = cell_pos(&harness, 5, 4);
@@ -646,6 +662,43 @@ mod stage3 {
         apply_stamps(&mut doc, &stamps, &c);
         let at = |x, y| doc.layers[0].get(x, y).unwrap().ch;
         assert_eq!((at(1, 0), at(8, 0), at(1, 3), at(8, 3)), ('/', '\\', '\\', '/'));
+    }
+}
+
+mod glyph_sets {
+    use crate::document::{Cell, Color, Document};
+    use crate::export::render_png;
+
+    /// Bright pixels of a one-cell PNG as (left half, right half, top third, rest).
+    fn lit(ch: char) -> (usize, usize, usize, usize) {
+        let mut doc = Document::new(1, 1);
+        doc.layers[0].set(0, 0, Cell::new(ch, Color::WHITE, Color::TRANSPARENT));
+        let img = render_png(&doc, false).unwrap();
+        let (w, h) = img.dimensions();
+        let mut counts = (0, 0, 0, 0);
+        for (x, y, p) in img.enumerate_pixels() {
+            if p[0] < 128 { continue; }
+            if x < w / 2 { counts.0 += 1 } else { counts.1 += 1 }
+            // A sextant row is a rounded third of the cell.
+            if (y as f32) < (h as f32 / 3.0).round() { counts.2 += 1 } else { counts.3 += 1 }
+        }
+        counts
+    }
+
+    #[test]
+    fn braille_and_sextants_export_as_shapes() {
+        // The font has neither; drawn from the font they'd be "missing glyph" boxes.
+        let (left, right, top, rest) = lit('⠁');
+        assert!(left > 0 && right == 0 && top > 0 && rest == 0, "{:?}", (left, right, top, rest));
+        let (left, right, top, rest) = lit('\u{1FB00}');
+        assert!(left > 0 && right == 0 && top > 0 && rest == 0, "{:?}", (left, right, top, rest));
+    }
+
+    #[test]
+    fn palettes_have_their_sizes() {
+        use crate::ui::panels::{PALETTES, palette};
+        let sizes: Vec<usize> = (0..PALETTES.len()).map(|i| palette(i).len()).collect();
+        assert_eq!(&sizes[..4], &[16, 256, 16, 4]);
     }
 }
 
