@@ -25,6 +25,7 @@ pub(crate) mod file_dialog;
 mod file_io;
 mod import;
 pub(crate) mod replace;
+mod scripting;
 pub(crate) mod storage;
 pub(crate) mod tabs;
 
@@ -132,6 +133,8 @@ pub struct AsciiArtEditor {
     /// One entry per tab; the one in front is `None`, its document lives in the fields above.
     tabs: Vec<Option<tabs::Tab>>,
     pub(crate) playback: animation::Playback,
+    /// The Script window, while open.
+    pub(crate) script: Option<scripting::ScriptWindow>,
     active_tab: usize,
     /// Folder of the last file chosen; the built-in chooser starts there.
     pub(crate) last_dir: Option<std::path::PathBuf>,
@@ -185,6 +188,7 @@ impl Default for AsciiArtEditor {
             command_palette: None,
             tabs:           vec![None],
             playback:       animation::Playback::default(),
+            script:         None,
             active_tab:     0,
             last_dir:       None,
             system_dialog_failed: cfg!(test),
@@ -920,6 +924,7 @@ impl eframe::App for AsciiArtEditor {
         self.image_import_dialog(&ctx);
         self.replace_dialog(&ctx);
         self.banner_dialog(&ctx);
+        self.script_window(&ctx);
         self.file_browser_dialog(&ctx);
         self.command_palette_dialog(&ctx);
 

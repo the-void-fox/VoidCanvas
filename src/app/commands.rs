@@ -41,6 +41,7 @@ pub enum Action {
     Deselect,
     Replace,
     InsertBanner,
+    Script,
     ClearLayer,
     Resize,
     ZoomIn,
@@ -137,6 +138,7 @@ impl AsciiArtEditor {
         }
         add("Edit", "Replace…", "Ctrl+H", Action::Replace);
         add("Edit", "Insert Banner…", "", Action::InsertBanner);
+        add("Edit", "Script…", "", Action::Script);
         add("Edit", "Clear Layer", "", Action::ClearLayer);
 
         add("Canvas", "Resize…", "", Action::Resize);
@@ -233,6 +235,7 @@ impl AsciiArtEditor {
             }
             Action::Replace => self.open_replace(),
             Action::InsertBanner => self.open_banner(),
+            Action::Script => self.open_script(),
             Action::ClearLayer => self.clear_layer(),
             Action::Resize => {
                 self.new_width  = self.doc.width;

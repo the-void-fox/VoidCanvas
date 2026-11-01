@@ -55,6 +55,8 @@ pub enum Command {
         old: Vec<u32>,
         new: Vec<u32>,
     },
+    /// Several commands as one step (e.g. a script); undone in reverse order.
+    Group(Vec<Command>),
 }
 
 impl Command {
@@ -72,6 +74,7 @@ impl Command {
             Command::FrameRemove { .. }    => "Delete Frame",
             Command::FrameMove { .. }      => "Move Frame",
             Command::FrameTiming { .. }    => "Frame Timing",
+            Command::Group(_)              => "Script",
         }
     }
 }

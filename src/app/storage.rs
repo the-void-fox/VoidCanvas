@@ -47,6 +47,9 @@ pub struct Settings {
     /// Command palette entries, most recently run first.
     #[serde(default)]
     pub recent_commands: Vec<String>,
+    /// The script last run in the Script window.
+    #[serde(default)]
+    pub script: String,
 }
 
 impl Settings {
@@ -84,6 +87,13 @@ impl Settings {
         self.recent_commands.insert(0, key);
         self.recent_commands.truncate(max);
         self.save();
+    }
+
+    pub fn set_script(&mut self, code: &str) {
+        if self.script != code {
+            self.script = code.to_owned();
+            self.save();
+        }
     }
 
     pub fn clear_recent(&mut self) {

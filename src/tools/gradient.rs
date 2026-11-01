@@ -116,6 +116,11 @@ pub fn gradient(doc: &Document, start: (usize, usize), end: (usize, usize), ctx:
     out
 }
 
+/// `a` blended towards `b` by `t` (0..1) in OKLab.
+pub fn mix(a: &Color, b: &Color, t: f32) -> Color {
+    Blend::new(a, b).at(t)
+}
+
 /// Two colours, ready to be mixed.
 struct Blend {
     from: Color,

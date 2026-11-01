@@ -23,6 +23,7 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 | **Canvas** | Terminal-style 1:2 cells; box-drawing, block and braille characters are drawn as shapes so they join seamlessly at any zoom; fit / 100 % zoom, optional grid |
 | **Clipboard** | Copy / cut / paste selections, also as plain text to and from other programs |
 | **Animation** | Frames with their own durations, a timeline with thumbnails, playback (`Enter`), `,` / `.` to step, onion skin, undo that returns to the frame it changed; layers are shared by all frames; **GIF** export |
+| **Scripting** | Edit → Script…: small [Rhai](https://rhai.rs) programs draw on the active layer (cells, text, lines, colours, noise, random, frames); examples included, a whole run is one undo step |
 | **Tabs** | Several documents at once, each with its own undo history, view and selection; `Ctrl+Tab` switches, `Ctrl+W` closes, quitting asks about each unsaved tab |
 | **Command palette** | `Ctrl+Shift+P` / `F1`: fuzzy-search every menu action, tool, layer action, palette and recent file; recently used commands come first |
 | **Files** | Native `.vc` format (JSON), `.txt` import / export, **ANSI** (24-bit colour) and **HTML** export, **PNG** export (opaque or transparent), animated **GIF** export, copy as text / ANSI, recent files, drag & drop, autosave of every unsaved tab with crash recovery |
@@ -152,7 +153,8 @@ src/
 ├── glyphs.rs            Box-drawing structure, glyph-aware flip / rotate
 ├── convert.rs           Picture → character art
 ├── figlet.rs            FIGlet banner fonts
-├── export.rs            PNG / ANSI / HTML export
+├── export.rs            PNG / GIF / ANSI / HTML export
+├── script.rs            Rhai scripting API
 ├── tests.rs             Model / history tests + headless UI tests (egui_kittest)
 ├── dev.rs               Debug-only helpers (VOID_CANVAS_SCREENSHOT=out.png)
 ├── app/
@@ -162,6 +164,7 @@ src/
 │   ├── dialogs.rs       New / Resize / About / unsaved-changes / recovery dialogs
 │   ├── import.rs        Import Image dialog
 │   ├── replace.rs       Replace dialog
+│   ├── scripting.rs     Script window
 │   ├── banner.rs        Insert Banner dialog
 │   ├── animation.rs     Frames, playback, timeline
 │   ├── storage.rs       Settings, recent files, autosave
@@ -199,7 +202,8 @@ To re-render the README screenshot offscreen:
 | [eframe](https://crates.io/crates/eframe) | Native window / app shell |
 | [serde](https://crates.io/crates/serde) + [serde_json](https://crates.io/crates/serde_json) | Serialisation |
 | [rfd](https://crates.io/crates/rfd) | Native file dialogs (a built-in chooser takes over when they can't open, e.g. Linux without xdg-desktop-portal) |
-| [image](https://crates.io/crates/image) | PNG encoding |
+| [image](https://crates.io/crates/image) | PNG / GIF encoding, picture import |
+| [rhai](https://crates.io/crates/rhai) | Embedded scripting language |
 | [ab_glyph](https://crates.io/crates/ab_glyph) | Font rasterisation for PNG export |
 | [egui_kittest](https://crates.io/crates/egui_kittest) | Headless UI tests (dev only) |
 

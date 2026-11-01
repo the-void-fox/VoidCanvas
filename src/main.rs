@@ -9,6 +9,7 @@ mod export;
 mod figlet;
 mod glyphs;
 mod history;
+mod script;
 mod icons;
 mod tools;
 mod theme;

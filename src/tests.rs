@@ -439,6 +439,19 @@ mod ui {
     }
 
     #[test]
+    fn the_script_window_runs_with_ctrl_enter() {
+        let mut harness = harness();
+        let ctx = harness.ctx.clone();
+        harness.state_mut().run(crate::app::commands::Action::Script, &ctx);
+        harness.state_mut().script.as_mut().unwrap().code = "text(0, 0, \"ok\");".into();
+        harness.step();
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::Enter);
+        harness.step();
+        assert_eq!(row(&harness, 0, 0, 2), "ok");
+        assert_eq!(harness.state().history.labels().0, vec!["Script"]);
+    }
+
+    #[test]
     fn select_all_and_bracket_keys() {
         let mut harness = harness();
         harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
@@ -1381,6 +1394,91 @@ mod animation {
         std::fs::remove_file(&path).unwrap();
         let delays: Vec<u32> = frames.iter().map(|f| f.delay().numer_denom_ms().0 / f.delay().numer_denom_ms().1.max(1)).collect();
         assert_eq!(delays, vec![100, 200, 300]);
+    }
+}
+
+mod scripts {
+    use crate::document::{Color, Document};
+    use crate::history::History;
+    use crate::script::{EXAMPLES, ScriptContext, changes, run};
+
+    fn context(doc: &Document) -> ScriptContext {
+        ScriptContext {
+            layer: 0,
+            primary_char: '#',
+            primary_fg: Color::WHITE,
+            secondary_fg: Color::new(128, 128, 128, 255),
+            area: (0, 0, doc.width, doc.height),
+        }
+    }
+
+    fn row(doc: &Document, y: usize) -> String {
+        (0..doc.width).map(|x| doc.layers[0].get(x, y).unwrap().ch).collect()
+    }
+
+    #[test]
+    fn every_example_runs_and_draws() {
+        for (name, code) in EXAMPLES {
+            let doc = Document::new(80, 40);
+            let result = run(code, &doc, context(&doc)).unwrap_or_else(|(e, _)| panic!("{name}: {e}"));
+            assert!(changes(&doc, &result.doc, 0).is_some(), "{name} changed nothing");
+        }
+    }
+
+    #[test]
+    fn the_api_writes_cells_inside_the_area() {
+        let doc = Document::new(6, 3);
+        let code = r##"
+            fill(".", "#ff0000");
+            set(0, 0, "A");
+            set(1.7, 0, 'B', "#00ff00", "#0000ff");
+            text(2, 1, "hi\nyo");
+            set(-1, 0, "X"); set(99, 99, "X");
+            print(get(0, 0) + width() + height());
+        "##;
+        let mut ctx = context(&doc);
+        ctx.area = (1, 0, 5, 3);
+        let result = run(code, &doc, ctx).unwrap_or_else(|(e, _)| panic!("{e}"));
+        assert_eq!(row(&result.doc, 0), "AB... ");
+        assert_eq!(row(&result.doc, 1), " .hi. ");
+        assert_eq!(row(&result.doc, 2), " .yo. ");
+        let b = result.doc.layers[0].get(1, 0).unwrap();
+        assert_eq!((b.fg.g, b.bg.b), (255, 255));
+        assert_eq!(result.doc.layers[0].get(4, 0).unwrap().fg, Color::new(255, 0, 0, 255));
+        assert_eq!(result.log, vec!["A63"]);
+    }
+
+    #[test]
+    fn a_seed_makes_random_output_repeatable() {
+        let doc = Document::new(1, 1);
+        let code = "seed(7); print(rand(1, 6)); print(rand()); print(noise(1.5, 2.5));";
+        let first = run(code, &doc, context(&doc)).ok().unwrap().log;
+        assert_eq!(run(code, &doc, context(&doc)).ok().unwrap().log, first);
+    }
+
+    #[test]
+    fn errors_name_the_line_and_endless_loops_stop() {
+        let doc = Document::new(2, 2);
+        let (error, log) = run("print(\"before\");\nlet x = 1;\nnope(x);", &doc, context(&doc)).err().unwrap();
+        assert!(error.starts_with("Line 3:"), "{error}");
+        assert_eq!(log, vec!["before"]);
+        assert!(run("loop { }", &doc, context(&doc)).is_err());
+    }
+
+    #[test]
+    fn a_script_is_one_undo_step_even_across_frames() {
+        let mut doc = Document::new(4, 1);
+        let code = "set(0, 0, \"a\"); add_frame(); set(1, 0, \"b\"); set_duration(40); go_to(0); set(3, 0, \"z\");";
+        let result = run(code, &doc, context(&doc)).unwrap_or_else(|(e, _)| panic!("{e}"));
+        let mut history = History::new(10);
+        history.execute(changes(&doc, &result.doc, 0).unwrap(), &mut doc);
+        assert_eq!(doc.frame_count(), 2);
+        assert_eq!((doc.durations[1], doc.composite_in(0, 3, 0).ch, doc.composite_in(1, 1, 0).ch), (40, 'z', 'b'));
+        history.undo(&mut doc);
+        assert_eq!(doc.frame_count(), 1);
+        assert_eq!(row(&doc, 0), "    ");
+        history.redo(&mut doc);
+        assert_eq!((doc.frame_count(), doc.composite_in(1, 0, 0).ch), (2, 'a'));
     }
 }
 

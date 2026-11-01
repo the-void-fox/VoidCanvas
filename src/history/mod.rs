@@ -166,6 +166,7 @@ fn apply_command(cmd: &Command, doc: &mut Document) {
         }
         Command::FrameMove { from, to } => doc.move_frame(*from, *to),
         Command::FrameTiming { new, .. } => doc.durations = new.clone(),
+        Command::Group(cmds) => cmds.iter().for_each(|cmd| apply_command(cmd, doc)),
     }
     doc.modified = true;
 }
@@ -209,6 +210,7 @@ fn apply_inverse(cmd: &Command, doc: &mut Document) {
         Command::FrameRemove { index, data } => doc.insert_frame(*index, data.clone()),
         Command::FrameMove { from, to } => doc.move_frame(*to, *from),
         Command::FrameTiming { old, .. } => doc.durations = old.clone(),
+        Command::Group(cmds) => cmds.iter().rev().for_each(|cmd| apply_inverse(cmd, doc)),
     }
     doc.modified = true;
 }

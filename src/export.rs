@@ -224,7 +224,7 @@ pub fn to_html(doc: &Document, title: &str) -> String {
             let style = |c: &crate::document::Cell| {
                 let fg = if c.ch == ' ' { String::new() } else { format!("color:{};", hex(&c.fg)) };
                 let bg = if c.bg.is_transparent() { String::new() } else { format!("background:{};", hex(&c.bg)) };
-                fg + &bg
+                fg + bg.as_str()
             };
             let current = style(&row[i]);
             let mut text = String::new();

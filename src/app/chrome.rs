@@ -112,6 +112,7 @@ impl AsciiArtEditor {
                         });
                         ui.separator();
                         if ui.add(Button::new("Replace…").shortcut_text("Ctrl+H")).clicked() { self.open_replace(); }
+                        if ui.button("Script…").on_hover_text("Draw with a small program (Rhai)").clicked() { self.run(Action::Script, &ctx); }
                         if ui.button("Clear Layer").clicked() { self.clear_layer(); }
                     });
 
