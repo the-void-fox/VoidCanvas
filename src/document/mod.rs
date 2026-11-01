@@ -2,6 +2,7 @@ pub mod cell;
 pub mod layer;
 pub mod codec;
 pub mod blend;
+pub mod scene;
 #[allow(clippy::module_inception)]
 pub mod document;
 
@@ -9,6 +10,7 @@ use std::collections::HashMap;
 
 pub use cell::{Cell, Color};
 pub use blend::{Blend, Stack};
+pub use scene::Scene3D;
 pub use layer::Layer;
 pub use document::{Document, FrameData};
 

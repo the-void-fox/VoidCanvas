@@ -119,6 +119,7 @@ impl Document {
         self.durations.insert(index, data.duration);
         self.show_frame(index);
         self.modified = true;
+        self.render_3d(None);
     }
 
     /// Takes frame `index` out (another one must be left); a neighbour is shown if it was.
@@ -132,6 +133,7 @@ impl Document {
             self.frame -= 1;
         }
         self.modified = true;
+        self.render_3d(None);
         FrameData { duration, cells }
     }
 
@@ -153,6 +155,7 @@ impl Document {
             self.frame
         };
         self.modified = true;
+        self.render_3d(None);
     }
 
     /// Puts `layer` (taken from this document earlier, maybe while another frame was shown) at `index`.
@@ -160,6 +163,18 @@ impl Document {
         layer.sync_frames(self.frame_count(), self.frame);
         self.layers[index] = layer;
         self.modified = true;
+        self.render_3d(None);
+    }
+
+    /// Draws the 3D layers' scenes into their cells: in `frame`, or in every frame.
+    pub fn render_3d(&mut self, frame: Option<usize>) {
+        let (w, h, count) = (self.width, self.height, self.frame_count());
+        for layer in &mut self.layers {
+            let Some(scene) = layer.scene.clone() else { continue };
+            for f in frame.map_or(0..count, |f| f..f + 1) {
+                *layer.cells_in_mut(f) = scene.render(w, h, f);
+            }
+        }
     }
 
     pub fn active_layer(&self) -> &Layer {
@@ -181,9 +196,13 @@ impl Document {
     pub fn insert_layer(&mut self, index: usize, mut layer: Layer) {
         layer.sync_frames(self.frame_count(), self.frame);
         let index = index.min(self.layers.len());
+        let solid = layer.scene.is_some();
         self.layers.insert(index, layer);
         self.active_layer = index;
         self.modified = true;
+        if solid {
+            self.render_3d(None);
+        }
     }
 
     pub fn take_layer(&mut self, index: usize) -> Layer {
@@ -210,6 +229,8 @@ impl Document {
     pub fn merged_down(&self, upper: usize) -> Layer {
         let top = &self.layers[upper];
         let mut merged = self.layers[upper - 1].clone();
+        // Painted into, a 3D layer becomes an ordinary one.
+        merged.scene = None;
         for frame in 0..self.frame_count() {
             for (below, t) in merged.cells_in_mut(frame).iter_mut().zip(top.cells_in(frame)) {
                 let mut stack = Stack::from_cell(below);
@@ -266,5 +287,6 @@ impl Document {
         self.width = new_w;
         self.height = new_h;
         self.modified = true;
+        self.render_3d(None);
     }
 }

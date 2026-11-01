@@ -27,8 +27,8 @@ impl AsciiArtEditor {
         let code = window.code.clone();
         self.settings.set_script(&code);
         let mut output: Vec<(bool, String)> = Vec::new();
-        if self.doc.active_layer().locked {
-            output.push((true, "The active layer is locked".into()));
+        if self.doc.active_layer().locked || self.doc.active_layer().scene.is_some() {
+            output.push((true, "The active layer is locked or 3D".into()));
         } else {
             let area = match self.tools.selection.selection {
                 Some((x1, y1, x2, y2)) => (x1, y1, x2 + 1, y2 + 1),

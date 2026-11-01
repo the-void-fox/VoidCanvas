@@ -78,9 +78,9 @@ fn merge_down_bakes_into_the_layer_below() {
     let mut history = History::new(10);
     let cmd = Command::LayerMergeDown {
         upper:  1,
-        layer:  doc.layers[1].clone(),
-        below:  doc.layers[0].clone(),
-        merged: doc.merged_down(1),
+        layer:  Box::new(doc.layers[1].clone()),
+        below:  Box::new(doc.layers[0].clone()),
+        merged: Box::new(doc.merged_down(1)),
     };
     history.execute(cmd, &mut doc);
     assert_eq!(doc.layers.len(), 1);
@@ -1439,7 +1439,7 @@ mod animation {
         // Merge down bakes every frame.
         doc.show_frame(0);
         doc.layers[1].set(2, 0, glyph('m'));
-        let cmd = Command::LayerMergeDown { upper: 1, layer: doc.layers[1].clone(), below: doc.layers[0].clone(), merged: doc.merged_down(1) };
+        let cmd = Command::LayerMergeDown { upper: 1, layer: Box::new(doc.layers[1].clone()), below: Box::new(doc.layers[0].clone()), merged: Box::new(doc.merged_down(1)) };
         history.execute(cmd, &mut doc);
         assert_eq!(doc.layers.len(), 1);
         assert_eq!((at(&doc, 0, 2), at(&doc, 2, 1), at(&doc, 1, 0)), ('m', 'T', 'b'));
@@ -1965,6 +1965,132 @@ mod script_brushes {
         assert!(check_brush("set(0, 0, \"x\");").unwrap_err().contains("brush(x, y, dx, dy)"));
         assert!(check_brush("fn brush(x, y, dx, dy) {").unwrap_err().starts_with("Line"));
         assert!(check_brush(RAINBOW_BRUSH).is_ok());
+    }
+}
+
+mod three_d {
+    use crate::document::scene::{Object3D, Scene3D, Style3D};
+    use crate::document::{Cell, Color, Document, Layer, codec};
+    use crate::history::{Command, History};
+
+    fn scene(object: Object3D, style: Style3D) -> Scene3D {
+        Scene3D { object, style, ..Scene3D::default() }
+    }
+
+    fn glyphs(cells: &[Cell]) -> String {
+        cells.iter().map(|c| c.ch).collect()
+    }
+
+    #[test]
+    fn objects_render_in_every_style() {
+        for object in [Object3D::Cube, Object3D::Sphere, Object3D::Torus, Object3D::Cylinder, Object3D::Cone] {
+            for style in Style3D::ALL {
+                let s = scene(object.clone(), style);
+                let cells = s.render(24, 12, 0);
+                assert_eq!(cells, s.render(24, 12, 0), "the same scene renders the same");
+                let drawn: Vec<&Cell> = cells.iter().filter(|c| !c.is_empty()).collect();
+                assert!(drawn.len() > 10, "{object:?} {style:?}: {}", glyphs(&cells));
+                assert!(cells[0].is_empty(), "the corner stays empty");
+                let fits = |c: &&Cell| match style {
+                    Style3D::Shade => " .:-=+*#%@".contains(c.ch),
+                    Style3D::Braille => ('\u{2800}'..='\u{28FF}').contains(&c.ch),
+                    Style3D::Blocks => "▀▄█".contains(c.ch),
+                };
+                assert!(drawn.iter().all(fits), "{object:?} {style:?}");
+            }
+        }
+        let cube = scene(Object3D::Cube, Style3D::Shade);
+        let turned = Scene3D { turn: [0.0, 45.0, 0.0], ..cube.clone() };
+        assert_ne!(cube.render(24, 12, 0), turned.render(24, 12, 0));
+    }
+
+    #[test]
+    fn art_seen_face_on_covers_itself_exactly() {
+        let mut app = crate::app::AsciiArtEditor::default();
+        app.doc = Document::new(20, 10);
+        for (x, y) in [(5, 3), (6, 3), (7, 3), (6, 4)] {
+            app.doc.layers[0].set(x, y, Cell::new('#', Color::new(255, 0, 0, 255), Color::TRANSPARENT));
+        }
+        app.tools.selection.selection = Some((5, 3, 7, 4));
+        let ctx = eframe::egui::Context::default();
+        app.run(crate::app::commands::Action::New3DFromSelection, &ctx);
+        assert!(app.three_d.is_some(), "the 3D window opens on the new layer");
+        let layer = app.doc.layers.len() - 1;
+        let mut s = app.doc.layers[layer].scene.as_deref().unwrap().clone();
+        s.turn = [0.0; 3];
+        let cells = s.render(20, 10, 0);
+        let covered: Vec<(usize, usize)> = (0..200).filter(|i| !cells[*i].is_empty()).map(|i| (i % 20, i / 20)).collect();
+        assert_eq!(covered, vec![(5, 3), (6, 3), (7, 3), (6, 4)]);
+        assert_eq!(cells[3 * 20 + 6].ch, '█');
+    }
+
+    #[test]
+    fn frames_turn_a_spinning_scene() {
+        let mut doc = Document::new(24, 12);
+        let mut layer = Layer::new(24, 12, "3D");
+        layer.scene = Some(Box::new(Scene3D { spin: [0.0, 30.0, 0.0], ..scene(Object3D::Cube, Style3D::Shade) }));
+        doc.insert_layer(1, layer);
+        let data = doc.frame_data(0);
+        doc.insert_frame(1, data);
+        let (a, b) = (doc.layers[1].cells_in(0).to_vec(), doc.layers[1].cells_in(1).to_vec());
+        assert_ne!(a, b, "a new frame is rendered at its own angle, not copied");
+        assert_eq!(b, doc.layers[1].scene.as_ref().unwrap().render(24, 12, 1));
+        // Tools leave a 3D layer alone.
+        assert!(!doc.layers[1].set(0, 0, Cell::new('x', Color::WHITE, Color::TRANSPARENT)));
+    }
+
+    #[test]
+    fn scene_edits_undo_and_rasterizing_keeps_the_cells() {
+        let mut doc = Document::new(24, 12);
+        let mut layer = Layer::new(24, 12, "3D");
+        layer.scene = Some(Box::new(scene(Object3D::Sphere, Style3D::Blocks)));
+        doc.insert_layer(1, layer);
+        let before = doc.layers[1].cells_in(0).to_vec();
+        let mut history = History::new(10);
+        let old = doc.layers[1].scene.clone();
+        let new = Some(Box::new(scene(Object3D::Torus, Style3D::Blocks)));
+        history.execute(Command::Scene { index: 1, old: old.clone(), new }, &mut doc);
+        assert_ne!(doc.layers[1].cells_in(0), before.as_slice());
+        history.undo(&mut doc);
+        assert_eq!(doc.layers[1].cells_in(0), before.as_slice(), "the sphere is back");
+
+        history.execute(Command::Scene { index: 1, old, new: None }, &mut doc);
+        assert!(doc.layers[1].scene.is_none());
+        assert_eq!(doc.layers[1].cells_in(0), before.as_slice(), "rasterized, it looks the same");
+        assert!(doc.layers[1].set(0, 0, Cell::new('x', Color::WHITE, Color::TRANSPARENT)), "and can be painted");
+    }
+
+    #[test]
+    fn merging_into_a_3d_layer_flattens_it_and_files_keep_scenes() {
+        let mut doc = Document::new(24, 12);
+        doc.layers[0].scene = Some(Box::new(scene(Object3D::Cone, Style3D::Braille)));
+        doc.render_3d(None);
+        let mut top = Layer::new(24, 12, "Top");
+        top.set(0, 0, Cell::new('x', Color::WHITE, Color::TRANSPARENT));
+        doc.insert_layer(1, top.clone());
+        let back = codec::decode(&codec::encode(&doc)).unwrap();
+        assert!(codec::same_content(&doc, &back));
+        assert_eq!(back.layers[0].scene, doc.layers[0].scene);
+
+        let merged = doc.merged_down(1);
+        assert!(merged.scene.is_none());
+        assert_eq!(merged.get(0, 0).unwrap().ch, 'x');
+    }
+
+    #[test]
+    fn turntable_adds_frames_in_one_step() {
+        let mut app = crate::app::AsciiArtEditor::default();
+        let ctx = eframe::egui::Context::default();
+        app.run(crate::app::commands::Action::New3D, &ctx);
+        assert_eq!(app.history.labels().0, vec!["New 3D Layer"]);
+        let layer = app.doc.active_layer;
+        assert!(app.doc.layers[layer].scene.is_some());
+        app.turntable(12);
+        assert_eq!(app.doc.frame_count(), 12);
+        assert_eq!(app.doc.layers[layer].scene.as_ref().unwrap().spin, [0.0, 30.0, 0.0]);
+        assert_eq!(app.history.labels().0.last(), Some(&"Turntable"));
+        app.history.undo(&mut app.doc);
+        assert_eq!(app.doc.frame_count(), 1);
     }
 }
 

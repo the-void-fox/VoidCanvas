@@ -132,6 +132,13 @@ fn write_cells(doc: &mut Document, layer_idx: usize, changes: &Changes, new: boo
     }
 }
 
+fn set_scene(doc: &mut Document, index: usize, scene: &Option<Box<crate::document::Scene3D>>) {
+    if let Some(layer) = doc.layers.get_mut(index) {
+        layer.scene = scene.clone();
+        doc.render_3d(None);
+    }
+}
+
 fn apply_command(cmd: &Command, doc: &mut Document) {
     match cmd {
         Command::Draw { layer_idx, frame, changes } => {
@@ -148,7 +155,7 @@ fn apply_command(cmd: &Command, doc: &mut Document) {
             doc.move_layer(*from, *to);
         }
         Command::LayerMergeDown { upper, merged, .. } => {
-            doc.replace_layer(upper - 1, merged.clone());
+            doc.replace_layer(upper - 1, (**merged).clone());
             doc.take_layer(*upper);
             doc.active_layer = upper - 1;
         }
@@ -172,6 +179,7 @@ fn apply_command(cmd: &Command, doc: &mut Document) {
         Command::FrameMove { from, to } => doc.move_frame(*from, *to),
         Command::FrameTiming { new, .. } => doc.durations = new.clone(),
         Command::Group(cmds) => cmds.iter().for_each(|cmd| apply_command(cmd, doc)),
+        Command::Scene { index, new, .. } => set_scene(doc, *index, new),
     }
     doc.modified = true;
 }
@@ -193,8 +201,8 @@ fn apply_inverse(cmd: &Command, doc: &mut Document) {
             doc.move_layer(*to, *from);
         }
         Command::LayerMergeDown { upper, layer, below, .. } => {
-            doc.replace_layer(upper - 1, below.clone());
-            doc.insert_layer(*upper, layer.clone());
+            doc.replace_layer(upper - 1, (**below).clone());
+            doc.insert_layer(*upper, (**layer).clone());
         }
         Command::LayerRename { index, old, .. } => {
             if let Some(layer) = doc.layers.get_mut(*index) {
@@ -221,6 +229,7 @@ fn apply_inverse(cmd: &Command, doc: &mut Document) {
         Command::FrameMove { from, to } => doc.move_frame(*to, *from),
         Command::FrameTiming { old, .. } => doc.durations = old.clone(),
         Command::Group(cmds) => cmds.iter().rev().for_each(|cmd| apply_inverse(cmd, doc)),
+        Command::Scene { index, old, .. } => set_scene(doc, *index, old),
     }
     doc.modified = true;
 }

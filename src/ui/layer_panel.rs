@@ -17,6 +17,9 @@ pub enum LayerAction {
     ToggleLock(usize),
     Rename(usize, String),
     Reorder(usize, usize),
+    New3D,
+    /// Open the 3D window on a 3D layer.
+    Edit3D(usize),
     /// Blend mode and opacity of a layer, changed live; `done` once the edit is over (one undo step).
     Style { index: usize, blend: Blend, opacity: f32, done: bool },
 }
@@ -49,6 +52,7 @@ impl LayerPanel {
                     };
                     button(ui, true,           icons::PLUS,       "New layer",       LayerAction::Add);
                     button(ui, true,           icons::DUPLICATE,  "Duplicate layer", LayerAction::Duplicate);
+                    button(ui, true,           icons::CUBE,       "New 3D layer",    LayerAction::New3D);
                     button(ui, active > 0,     icons::MERGE_DOWN, "Merge down",      LayerAction::MergeDown);
                     button(ui, active + 1 < n, icons::ARROW_UP,   "Move layer up",   LayerAction::MoveUp);
                     button(ui, active > 0,     icons::ARROW_DOWN, "Move layer down", LayerAction::MoveDown);
@@ -145,6 +149,9 @@ impl LayerPanel {
                     let (lock, lock_hint) = if layer.locked { (icons::LOCK, "Unlock layer") } else { (icons::LOCK_OPEN, "Lock layer") };
                     if icon_button(&mut child_ui, lock, 24.0, false, lock_hint).clicked() {
                         action = Some(LayerAction::ToggleLock(layer_idx));
+                    }
+                    if layer.scene.is_some() && icon_button(&mut child_ui, icons::CUBE, 24.0, false, "Edit in the 3D window").clicked() {
+                        action = Some(LayerAction::Edit3D(layer_idx));
                     }
 
                     child_ui.add_space(6.0);

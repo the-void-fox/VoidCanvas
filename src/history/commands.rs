@@ -1,4 +1,4 @@
-use crate::document::{Blend, Changes, FrameData, Layer};
+use crate::document::{Blend, Changes, FrameData, Layer, Scene3D};
 
 #[derive(Clone, Debug)]
 pub enum Command {
@@ -24,9 +24,9 @@ pub enum Command {
     /// Bakes the layer at `upper` into the layer below it (in every frame) and removes it.
     LayerMergeDown {
         upper: usize,
-        layer: Layer,
-        below: Layer,
-        merged: Layer,
+        layer: Box<Layer>,
+        below: Box<Layer>,
+        merged: Box<Layer>,
     },
     LayerRename {
         index: usize,
@@ -61,6 +61,12 @@ pub enum Command {
         old: Vec<u32>,
         new: Vec<u32>,
     },
+    /// A 3D layer's scene; `None` is an ordinary layer (rasterized).
+    Scene {
+        index: usize,
+        old: Option<Box<Scene3D>>,
+        new: Option<Box<Scene3D>>,
+    },
     /// Several commands as one step (e.g. a script); undone in reverse order.
     Group(Vec<Command>),
 }
@@ -82,6 +88,7 @@ impl Command {
             Command::FrameMove { .. }      => "Move Frame",
             Command::FrameTiming { .. }    => "Frame Timing",
             Command::Group(_)              => "Script",
+            Command::Scene { .. }          => "3D",
         }
     }
 }

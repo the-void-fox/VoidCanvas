@@ -22,16 +22,18 @@
 
 use std::collections::HashMap;
 
-use super::{Blend, Cell, Color, Document, Layer};
+use super::{Blend, Cell, Color, Document, Layer, Scene3D};
 
 pub const MAGIC: &[u8; 8] = b"VOIDCANV";
-/// 3 added layer blend modes; 2 files still load.
+/// 3 added layer blend modes and 3D scenes; 2 files still load.
 const VERSION: u8 = 3;
 
 /// Sizes a file may declare; anything bigger is damaged (or would not fit in memory).
 const MAX_SIDE: usize = 4096;
 const MAX_CELLS: usize = 32 << 20;
 const MAX_TEXT: usize = 1 << 16;
+/// A 3D scene can hold a whole extruded picture.
+const MAX_SCENE: usize = 64 << 20;
 
 /// Is `bytes` a file in this format (rather than an older JSON one)?
 pub fn is_binary(bytes: &[u8]) -> bool {
@@ -488,6 +490,11 @@ pub(crate) fn encode_with(doc: &Document, predicted: bool) -> Vec<u8> {
         }
         let blend = Blend::ALL.iter().position(|b| *b == layer.blend).unwrap_or(0);
         m.blend.encode(&mut e, blend as u32);
+        // A 3D layer's scene, as JSON (its cells are stored too, like any layer's).
+        e.bit(&mut m.flag, layer.scene.is_some());
+        if let Some(scene) = &layer.scene {
+            text(&mut e, &mut m, &serde_json::to_string(scene).unwrap_or_default());
+        }
     }
     m.number.encode(&mut e, glyphs.len() as u32);
     let mut previous = 0;
@@ -619,12 +626,20 @@ pub fn decode(bytes: &[u8]) -> Result<Document, String> {
         let visible = d.bit(&mut m.flag);
         let locked = d.bit(&mut m.flag);
         let opacity = if d.bit(&mut m.flag) { 1.0 } else { f32::from_bits(d.direct(32)) };
-        let blend = if version >= 3 {
-            *Blend::ALL.get(m.blend.decode(&mut d) as usize).ok_or_else(|| damaged("a blend mode"))?
+        let (blend, scene) = if version >= 3 {
+            let blend = *Blend::ALL.get(m.blend.decode(&mut d) as usize).ok_or_else(|| damaged("a blend mode"))?;
+            let scene = if d.bit(&mut m.flag) {
+                let len = number(&mut d, &mut m, MAX_SCENE)?;
+                let json: Vec<u8> = (0..len).map(|_| m.byte.decode(&mut d) as u8).collect();
+                Some(serde_json::from_slice::<Box<Scene3D>>(&json).map_err(|_| damaged("a 3D scene"))?)
+            } else {
+                None
+            };
+            (blend, scene)
         } else {
-            Blend::Normal
+            (Blend::Normal, None)
         };
-        info.push((name, visible, locked, opacity, blend));
+        info.push((name, visible, locked, opacity, blend, scene));
     }
     // Every glyph and colour in the tables is used by some cell.
     let count = number(&mut d, &mut m, total)?;
@@ -718,7 +733,7 @@ pub fn decode(bytes: &[u8]) -> Result<Document, String> {
     let layers = all
         .into_iter()
         .zip(info)
-        .map(|(cells, (name, visible, locked, opacity, blend))| Layer::from_frames(name, w, h, visible, locked, opacity, blend, cells, frame))
+        .map(|(cells, (name, visible, locked, opacity, blend, scene))| Layer::from_frames(name, w, h, visible, locked, opacity, blend, scene, cells, frame))
         .collect();
     let mut doc = Document::new(w, h);
     doc.layers = layers;

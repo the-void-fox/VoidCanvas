@@ -43,6 +43,10 @@ pub enum Action {
     InsertBanner,
     Script,
     BrushFromSelection,
+    New3D,
+    New3DFromSelection,
+    Edit3D,
+    Rasterize3D,
     UseBrush(crate::tools::brush::BrushPreset),
     ClearLayer,
     Resize,
@@ -169,6 +173,14 @@ impl AsciiArtEditor {
         let active = self.doc.active_layer;
         let layer = self.doc.active_layer();
         add("Layer", "New Layer", "", Action::Layer(LayerAction::Add));
+        add("Layer", "New 3D Layer", "", Action::New3D);
+        if has_selection {
+            add("Layer", "New 3D Layer from Selection", "", Action::New3DFromSelection);
+        }
+        if self.doc.active_layer().scene.is_some() {
+            add("Layer", "Edit 3D…", "", Action::Edit3D);
+            add("Layer", "Rasterize 3D", "", Action::Rasterize3D);
+        }
         add("Layer", "Duplicate Layer", "", Action::Layer(LayerAction::Duplicate));
         if layers > 1 { add("Layer", "Delete Layer", "", Action::Layer(LayerAction::Remove)); }
         if active > 0 {
@@ -223,9 +235,11 @@ impl AsciiArtEditor {
             Action::Play => self.toggle_playback(),
             Action::ToggleOnionSkin => self.canvas_state.onion_skin = !self.canvas_state.onion_skin,
             Action::Undo => {
+                self.close_3d();
                 if !self.drawing && self.history.undo(&mut self.doc) { self.show_status("Undo"); }
             }
             Action::Redo => {
+                self.close_3d();
                 if !self.drawing && self.history.redo(&mut self.doc) { self.show_status("Redo"); }
             }
             Action::Copy => { self.copy(ctx); }
@@ -246,6 +260,13 @@ impl AsciiArtEditor {
             Action::InsertBanner => self.open_banner(),
             Action::Script => self.open_script(),
             Action::BrushFromSelection => self.brush_from_selection(),
+            Action::New3D => self.apply_layer_action(LayerAction::New3D),
+            Action::New3DFromSelection => {
+                self.close_3d();
+                self.add_3d_from_selection();
+            }
+            Action::Edit3D => self.edit_3d(self.doc.active_layer),
+            Action::Rasterize3D => self.rasterize_3d(),
             Action::UseBrush(preset) => {
                 self.tool_options.brush = preset.kind;
                 self.tool_options.brush_name = preset.name;

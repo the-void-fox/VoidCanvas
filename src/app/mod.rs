@@ -28,6 +28,7 @@ pub(crate) mod replace;
 mod scripting;
 pub(crate) mod storage;
 pub(crate) mod tabs;
+mod three_d;
 
 use crate::ui::{
     canvas::{CanvasEvent, CanvasState, PreviewSettings, draw_canvas, shape_mods},
@@ -138,6 +139,8 @@ pub struct AsciiArtEditor {
     brush_save_name: String,
     /// A layer's blend mode and opacity before the style edit in progress.
     style_before: Option<(usize, crate::document::Blend, f32)>,
+    /// The 3D window, while open.
+    pub(crate) three_d: Option<three_d::ThreeDWindow>,
     /// The Script window, while open.
     pub(crate) script: Option<scripting::ScriptWindow>,
     active_tab: usize,
@@ -194,6 +197,7 @@ impl Default for AsciiArtEditor {
             tabs:           vec![None],
             playback:       animation::Playback::default(),
             script:         None,
+            three_d:        None,
             style_before:   None,
             brush_save_name: String::new(),
             active_tab:     0,
@@ -242,7 +246,12 @@ impl AsciiArtEditor {
 
     /// Shows a message and returns `true` if the active layer can't be edited.
     fn active_layer_locked(&mut self) -> bool {
-        let locked = self.doc.active_layer().locked;
+        let layer = self.doc.active_layer();
+        if layer.scene.is_some() {
+            self.show_status("A 3D layer shows its scene: change it in the 3D window, or rasterize it to paint");
+            return true;
+        }
+        let locked = layer.locked;
         if locked {
             self.show_status("Layer is locked");
         }
@@ -836,6 +845,10 @@ impl AsciiArtEditor {
     fn apply_layer_action(&mut self, action: LayerAction) {
         let n = self.doc.layers.len();
         let active = self.doc.active_layer;
+        // The 3D window holds a layer's place; anything that moves layers closes it first.
+        if !matches!(action, LayerAction::Select(_) | LayerAction::ToggleVisible(_) | LayerAction::ToggleLock(_) | LayerAction::Rename(..) | LayerAction::Style { .. }) {
+            self.close_3d();
+        }
 
         let cmd = match action {
             LayerAction::Select(i) => {
@@ -882,9 +895,9 @@ impl AsciiArtEditor {
                 }
                 Command::LayerMergeDown {
                     upper:  active,
-                    layer:  self.doc.active_layer().clone(),
-                    below:  self.doc.layers[active - 1].clone(),
-                    merged: self.doc.merged_down(active),
+                    layer:  Box::new(self.doc.active_layer().clone()),
+                    below:  Box::new(self.doc.layers[active - 1].clone()),
+                    merged: Box::new(self.doc.merged_down(active)),
                 }
             }
             LayerAction::MoveUp => {
@@ -903,6 +916,15 @@ impl AsciiArtEditor {
                 let name = name.trim().to_string();
                 if i >= n || name.is_empty() || name == self.doc.layers[i].name { return; }
                 Command::LayerRename { index: i, old: self.doc.layers[i].name.clone(), new: name }
+            }
+            LayerAction::New3D => {
+                self.add_3d_layer("3D Cube", crate::document::Scene3D::default());
+                return;
+            }
+            LayerAction::Edit3D(i) => {
+                if i < n { self.doc.active_layer = i; }
+                self.edit_3d(i);
+                return;
             }
             LayerAction::Style { index, blend, opacity, done } => {
                 // Applied live; the whole edit becomes one undo step when it's done.
@@ -1071,6 +1093,7 @@ impl eframe::App for AsciiArtEditor {
         self.replace_dialog(&ctx);
         self.banner_dialog(&ctx);
         self.script_window(&ctx);
+        self.three_d_window(&ctx);
         self.file_browser_dialog(&ctx);
         self.command_palette_dialog(&ctx);
 

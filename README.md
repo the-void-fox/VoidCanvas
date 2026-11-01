@@ -23,6 +23,7 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 | **Canvas** | Terminal-style 1:2 cells; box-drawing, block and braille characters are drawn as shapes so they join seamlessly at any zoom; fit / 100 % zoom, optional grid |
 | **Clipboard** | Copy / cut / paste selections, also as plain text to and from other programs |
 | **Animation** | Aseprite-style timeline (layers × frames, a dot per cel, drag frame numbers to reorder, hover for a preview, right click for duration and more), playback (`Enter`), `,` / `.` to step, onion skin of the active layer, undo that returns to the frame it changed; layers are shared by all frames; **GIF** export |
+| **3D layers** | A layer drawn from a 3D scene, re-editable any time (like Photoshop's 3D layers): cube, sphere, torus, cylinder, cone, extruded **FIGlet text**, or **the selected art pushed out into blocks** of its own colours; turn it by dragging, light it, draw it as shaded ASCII (`.:-=+*#%@`, like the spinning donut), dithered braille or colour half blocks; spin it per frame or make a **turntable** animation in one click; rasterize to paint on it |
 | **Scripting** | Edit → Script…: small [Rhai](https://rhai.rs) programs draw on the active layer (cells, text, lines, colours, noise, random, frames); examples included, `Ctrl+Enter` runs, a whole run is one undo step; **Use as Brush** paints with a script's `fn brush(x, y, dx, dy)` |
 | **Tabs** | Several documents at once, each with its own undo history, view and selection; `Ctrl+Tab` switches, `Ctrl+W` closes, quitting asks about each unsaved tab |
 | **Command palette** | `Ctrl+Shift+P` / `F1`: fuzzy-search every menu action, tool, layer action, palette and recent file; recently used commands come first |
@@ -188,6 +189,7 @@ src/
 │   ├── replace.rs       Replace dialog
 │   ├── scripting.rs     Script window
 │   ├── banner.rs        Insert Banner dialog
+│   ├── three_d.rs       The 3D window
 │   ├── animation.rs     Frames, playback, timeline
 │   ├── storage.rs       Settings, recent files, autosave
 │   ├── tabs.rs          Document tabs
@@ -198,6 +200,7 @@ src/
 │   ├── layer.rs         Layer (a grid of cells per animation frame)
 │   ├── document.rs      Document (layer stack, frames, compositing)
 │   ├── blend.rs         Blend modes, glyph stacks, combining characters
+│   ├── scene.rs         3D scenes and their renderer (distance fields, voxels)
 │   └── codec.rs         The compressed .vc format
 ├── history/
 │   ├── commands.rs      Command enum

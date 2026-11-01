@@ -60,6 +60,7 @@ impl AsciiArtEditor {
         self.canvas_state.show_grid = grid;
         self.canvas_state.onion_skin = onion;
         self.stop_playback();
+        self.close_3d();
         self.tools.text.stop();
         self.layer_panel.rename_idx = None;
     }

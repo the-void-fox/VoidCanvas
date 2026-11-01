@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use super::{Blend, Changes, cell::Cell};
+use super::{Blend, Changes, Scene3D, cell::Cell};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
@@ -12,6 +12,9 @@ pub struct Layer {
     /// How its glyphs meet the glyphs below.
     #[serde(default)]
     pub blend: Blend,
+    /// A 3D layer's scene: its cells are rendered from it, and tools leave them alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene: Option<Box<Scene3D>>,
     /// The cells of the frame being shown.
     cells: Vec<Cell>,
     /// In an animation, the cells of every frame by frame number; the shown frame's entry is
@@ -30,6 +33,7 @@ impl Layer {
             locked: false,
             opacity: 1.0,
             blend: Blend::Normal,
+            scene: None,
             cells: vec![Cell::default(); width * height],
             frames: Vec::new(),
         }
@@ -45,6 +49,7 @@ impl Layer {
         locked: bool,
         opacity: f32,
         blend: Blend,
+        scene: Option<Box<Scene3D>>,
         mut frames: Vec<Vec<Cell>>,
         shown: usize,
     ) -> Self {
@@ -52,7 +57,7 @@ impl Layer {
         if frames.len() == 1 {
             frames.clear();
         }
-        Self { name, width, height, visible, locked, opacity, blend, cells, frames }
+        Self { name, width, height, visible, locked, opacity, blend, scene, cells, frames }
     }
 
     fn blank(&self) -> Vec<Cell> {
@@ -156,7 +161,7 @@ impl Layer {
     }
 
     pub fn set(&mut self, x: usize, y: usize, cell: Cell) -> bool {
-        if self.locked {
+        if self.locked || self.scene.is_some() {
             return false;
         }
         self.put(x, y, cell)
