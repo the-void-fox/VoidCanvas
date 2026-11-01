@@ -234,12 +234,10 @@ fn march(field: fn(Vec3) -> f32, origin: Vec3, dir: Vec3) -> Option<Vec3> {
         let p = add(origin, scale(dir, t));
         let d = field(p);
         if d < 1e-3 {
+            // The gradient from four samples on a tetrahedron (Inigo Quilez), not six.
             const E: f32 = 1e-3;
-            let n = [
-                field(add(p, [E, 0.0, 0.0])) - field(add(p, [-E, 0.0, 0.0])),
-                field(add(p, [0.0, E, 0.0])) - field(add(p, [0.0, -E, 0.0])),
-                field(add(p, [0.0, 0.0, E])) - field(add(p, [0.0, 0.0, -E])),
-            ];
+            const K: [Vec3; 4] = [[1.0, -1.0, -1.0], [-1.0, -1.0, 1.0], [-1.0, 1.0, -1.0], [1.0, 1.0, 1.0]];
+            let n = K.iter().fold([0.0; 3], |n, k| add(n, scale(*k, field(add(p, scale(*k, E))))));
             return Some(normalize(n));
         }
         t += d;
@@ -317,7 +315,7 @@ impl Voxels {
 }
 
 /// What one ray saw.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct Sample {
     /// 0..1, with the ambient light.
     light: f32,
@@ -335,14 +333,16 @@ impl Scene3D {
         let light = [el.cos() * az.sin(), el.sin(), el.cos() * az.cos()];
         let half = normalize(add(light, [0.0, 0.0, 1.0]));
         let base = [self.color.r, self.color.g, self.color.b].map(|c| c as f32 / 255.0);
+        let ramp: Vec<char> = self.ramp.chars().collect();
 
         // Canvas units are cell widths; a cell is 2 units tall.
         let (w, h) = (width as f32, height as f32 * 2.0);
         let centre = [w / 2.0 + self.position[0] * w, h / 2.0 + self.position[1] * h];
         let radius = (self.size * w.min(h) / 2.0).max(0.01);
+        let ray = mul(&r_inv, [0.0, 0.0, -1.0]);
         let sample = |x: f32, y: f32| -> Option<Sample> {
             let view = [(x - centre[0]) / radius, -(y - centre[1]) / radius, 3.0];
-            let hit = shape.hit(mul(&r_inv, view), mul(&r_inv, [0.0, 0.0, -1.0]))?;
+            let hit = shape.hit(mul(&r_inv, view), ray)?;
             let n = mul(&r, hit.normal);
             let diffuse = dot(n, light).max(0.0);
             let lit = self.ambient + (1.0 - self.ambient) * diffuse;
@@ -357,52 +357,65 @@ impl Scene3D {
             Style3D::Braille => (2, 4),
             Style3D::Blocks => (1, 2),
         };
-        let mut cells = Vec::with_capacity(width * height);
-        for cy in 0..height {
-            for cx in 0..width {
-                let samples: Vec<Option<Sample>> = (0..sy)
-                    .flat_map(|j| (0..sx).map(move |i| (i, j)))
-                    .map(|(i, j)| sample(cx as f32 + (i as f32 + 0.5) / sx as f32, (cy as f32 + (j as f32 + 0.5) / sy as f32) * 2.0))
-                    .collect();
-                let hits: Vec<&Sample> = samples.iter().flatten().collect();
-                if hits.is_empty() {
-                    cells.push(Cell::empty());
-                    continue;
-                }
-                let mean = |f: &dyn Fn(&Sample) -> f32| hits.iter().map(|s| f(s)).sum::<f32>() / hits.len() as f32;
-                let color = to_color([0, 1, 2].map(|k| mean(&|s| s.color[k])));
-                let cell = match self.style {
-                    Style3D::Shade => {
-                        let ramp: Vec<char> = self.ramp.chars().collect();
-                        // Misses count as dark, so edges fade out.
-                        let value = hits.iter().map(|s| s.light).sum::<f32>() / samples.len() as f32;
-                        let ch = ramp.get(((value * (ramp.len().max(1) - 1) as f32).round() as usize).min(ramp.len().saturating_sub(1))).copied().unwrap_or(' ');
-                        // Dim glyphs stay visible: the colour only darkens so far.
-                        let shade = to_color([0, 1, 2].map(|k| mean(&|s| s.color[k]).max(base[k] * 0.35)));
-                        Cell::new(ch, shade, Color::TRANSPARENT)
-                    }
-                    Style3D::Braille => {
-                        const ORDER: [[f32; 2]; 4] = [[0.0, 8.0], [12.0, 4.0], [3.0, 11.0], [15.0, 7.0]];
-                        const DOT: [[u32; 2]; 4] = [[0, 3], [1, 4], [2, 5], [6, 7]];
-                        let mut bits = 0;
-                        for (k, s) in samples.iter().enumerate() {
-                            let (i, j) = (k % 2, k / 2);
-                            if let Some(s) = s
-                                && s.light > (ORDER[j][i] + 0.5) / 16.0
-                            {
-                                bits |= 1 << DOT[j][i];
-                            }
-                        }
-                        if bits == 0 { Cell::empty() } else { Cell::new(char::from_u32(0x2800 + bits).unwrap(), color, Color::TRANSPARENT) }
-                    }
-                    Style3D::Blocks => {
-                        let pixel = |s: &Option<Sample>| s.as_ref().map(|s| to_color(s.color));
-                        from_halves(pixel(&samples[0]), pixel(&samples[1]))
-                    }
-                };
-                cells.push(cell);
+        let cell_at = |cx: usize, cy: usize| -> Cell {
+            // At most 8 rays per cell, kept on the stack.
+            let mut samples = [None; 8];
+            let count = sx * sy;
+            for (k, slot) in samples[..count].iter_mut().enumerate() {
+                let (i, j) = (k % sx, k / sx);
+                *slot = sample(cx as f32 + (i as f32 + 0.5) / sx as f32, (cy as f32 + (j as f32 + 0.5) / sy as f32) * 2.0);
             }
+            let samples = &samples[..count];
+            let hits = samples.iter().flatten().count();
+            if hits == 0 {
+                return Cell::empty();
+            }
+            let mean = |f: &dyn Fn(&Sample) -> f32| samples.iter().flatten().map(f).sum::<f32>() / hits as f32;
+            let color = to_color([0, 1, 2].map(|k| mean(&|s| s.color[k])));
+            match self.style {
+                Style3D::Shade => {
+                    // Misses count as dark, so edges fade out.
+                    let value = samples.iter().flatten().map(|s| s.light).sum::<f32>() / count as f32;
+                    let last = ramp.len().saturating_sub(1);
+                    let ch = ramp.get(((value * last as f32).round() as usize).min(last)).copied().unwrap_or(' ');
+                    // Dim glyphs stay visible: the colour only darkens so far.
+                    let shade = to_color([0, 1, 2].map(|k| mean(&|s| s.color[k]).max(base[k] * 0.35)));
+                    Cell::new(ch, shade, Color::TRANSPARENT)
+                }
+                Style3D::Braille => {
+                    const ORDER: [[f32; 2]; 4] = [[0.0, 8.0], [12.0, 4.0], [3.0, 11.0], [15.0, 7.0]];
+                    const DOT: [[u32; 2]; 4] = [[0, 3], [1, 4], [2, 5], [6, 7]];
+                    let mut bits = 0;
+                    for (k, s) in samples.iter().enumerate() {
+                        let (i, j) = (k % 2, k / 2);
+                        if let Some(s) = s
+                            && s.light > (ORDER[j][i] + 0.5) / 16.0
+                        {
+                            bits |= 1 << DOT[j][i];
+                        }
+                    }
+                    if bits == 0 { Cell::empty() } else { Cell::new(char::from_u32(0x2800 + bits).unwrap(), color, Color::TRANSPARENT) }
+                }
+                Style3D::Blocks => {
+                    let pixel = |s: &Option<Sample>| s.as_ref().map(|s| to_color(s.color));
+                    from_halves(pixel(&samples[0]), pixel(&samples[1]))
+                }
+            }
+        };
+        let rows = |from: usize, to: usize| -> Vec<Cell> {
+            (from..to).flat_map(|cy| (0..width).map(move |cx| (cx, cy))).map(|(cx, cy)| cell_at(cx, cy)).collect()
+        };
+
+        // Bands of rows on every core; small pictures in one go.
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(16);
+        if threads < 2 || width * height * sx * sy < 16_000 {
+            return rows(0, height);
         }
-        cells
+        let band = height.div_ceil(threads);
+        std::thread::scope(|scope| {
+            let rows = &rows;
+            let bands: Vec<_> = (0..height).step_by(band).map(|from| scope.spawn(move || rows(from, (from + band).min(height)))).collect();
+            bands.into_iter().flat_map(|b| b.join().expect("a render thread")).collect()
+        })
     }
 }
