@@ -2204,7 +2204,7 @@ mod gradients {
     use crate::document::Document;
     use crate::tools::gradient::{GradientSettings, GradientShape, gradient};
 
-    fn linear(doc: &Document) -> GradientSettings {
+    fn linear(doc: &Document) -> GradientSettings<'static> {
         GradientSettings { shape: GradientShape::Linear, ramp: " ░▒▓█", dither: false, region: (0, 0, doc.width, doc.height) }
     }
 
