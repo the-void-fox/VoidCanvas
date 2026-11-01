@@ -491,6 +491,20 @@ mod ui {
     }
 
     #[test]
+    fn a_script_becomes_the_brush() {
+        let mut harness = harness();
+        let ctx = harness.ctx.clone();
+        harness.state_mut().run(crate::app::commands::Action::Script, &ctx);
+        harness.state_mut().script.as_mut().unwrap().code = crate::script::RAINBOW_BRUSH.into();
+        harness.step();
+        harness.get_by_label("Use as Brush").click();
+        harness.step();
+        let app = harness.state();
+        assert_eq!(app.active_tool, ToolType::Brush);
+        assert!(matches!(&app.tool_options.brush, crate::tools::brush::BrushKind::Script { code } if code.contains("fn brush")));
+    }
+
+    #[test]
     fn ctrl_b_makes_the_selection_the_brush() {
         let mut harness = harness();
         set_row(&mut harness, 0, 0, "<>");
@@ -1509,6 +1523,10 @@ mod scripts {
     #[test]
     fn every_example_runs_and_draws() {
         for (name, code) in EXAMPLES {
+            if code.contains("fn brush") {
+                assert!(crate::script::check_brush(code).is_ok(), "{name}");
+                continue;
+            }
             let doc = Document::new(80, 40);
             let result = run(code, &doc, context(&doc)).unwrap_or_else(|(e, _)| panic!("{name}: {e}"));
             assert!(changes(&doc, &result.doc, 0).is_some(), "{name} changed nothing");
@@ -1886,6 +1904,67 @@ mod brushes {
         tool.on_release();
         assert_eq!(doc.layers[0].get(2, 1).unwrap().fg, crate::document::Color::WHITE, "slot colours");
         assert_eq!(doc.layers[0].get(3, 1).unwrap().ch, ' ', "empty stamp cells leave the canvas alone");
+    }
+}
+
+mod script_brushes {
+    use super::{NONE, ctx, glyph, red};
+    use crate::document::Document;
+    use crate::script::{GRASS_BRUSH, RAINBOW_BRUSH, check_brush};
+    use crate::tools::brush::{BrushKind, BrushTool};
+
+    fn stroke(doc: &mut Document, code: &str, points: &[(usize, usize)]) -> (BrushTool, usize) {
+        let brush = BrushKind::Script { code: code.into() };
+        let c = ctx('#', red(), NONE);
+        let mut tool = BrushTool::default();
+        tool.on_press(doc, points[0].0, points[0].1, &brush, &c);
+        for &(x, y) in &points[1..] {
+            tool.on_drag(doc, x, y, &brush, &c);
+        }
+        let changed = tool.on_release().len();
+        (tool, changed)
+    }
+
+    fn row(doc: &Document, y: usize) -> String {
+        (0..doc.width).map(|x| doc.layers[0].get(x, y).unwrap().ch).collect()
+    }
+
+    #[test]
+    fn script_brushes_draw_along_the_stroke() {
+        let mut doc = Document::new(8, 3);
+        let (_, changed) = stroke(&mut doc, RAINBOW_BRUSH, &[(1, 1), (5, 1)]);
+        assert_eq!(row(&doc, 1), " █████  ");
+        assert_eq!(changed, 5, "one undo step with every cell");
+        assert_ne!(doc.layers[0].get(1, 1).unwrap().fg, doc.layers[0].get(2, 1).unwrap().fg, "a rainbow");
+
+        let mut doc = Document::new(6, 6);
+        let way = r#"fn brush(x, y, dx, dy) { set(x, y, if dx != 0 { "-" } else if dy != 0 { "|" } else { "o" }); }"#;
+        stroke(&mut doc, way, &[(1, 1), (4, 1), (4, 4)]);
+        assert_eq!(row(&doc, 1), " o--- ");
+        assert_eq!((2..5).map(|y| doc.layers[0].get(4, y).unwrap().ch).collect::<String>(), "|||");
+    }
+
+    #[test]
+    fn grass_grows_up_and_leaves_art_alone() {
+        let mut doc = Document::new(10, 6);
+        doc.layers[0].set(3, 3, glyph('@'));
+        stroke(&mut doc, GRASS_BRUSH, &[(0, 4), (9, 4)]);
+        assert!(row(&doc, 4).chars().all(|c| "|/\\'".contains(c)), "a blade on every cell: {}", row(&doc, 4));
+        assert_eq!(doc.layers[0].get(3, 3).unwrap().ch, '@');
+        assert_eq!(row(&doc, 0), "          ", "at most three tall");
+    }
+
+    #[test]
+    fn broken_brushes_say_why() {
+        let mut doc = Document::new(6, 2);
+        let failing = r##"fn brush(x, y, dx, dy) { if x > 2 { nope(); } set(x, y, "#"); }"##;
+        let (mut tool, changed) = stroke(&mut doc, failing, &[(0, 0), (5, 0)]);
+        assert_eq!(row(&doc, 0), "###   ", "it stops at the error and keeps what it drew");
+        assert_eq!(changed, 3);
+        assert!(tool.error.take().unwrap().contains("nope"));
+        assert!(check_brush("set(0, 0, \"x\");").unwrap_err().contains("brush(x, y, dx, dy)"));
+        assert!(check_brush("fn brush(x, y, dx, dy) {").unwrap_err().starts_with("Line"));
+        assert!(check_brush(RAINBOW_BRUSH).is_ok());
     }
 }
 

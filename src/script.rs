@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use rhai::{Dynamic, Engine, FLOAT, INT, Map};
+use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, FLOAT, INT, Map, Scope};
 
 use crate::document::{Cell, Changes, Color, Document};
 use crate::history::Command;
@@ -51,10 +51,32 @@ pub const REFERENCE: &[(&str, &str)] = &[
     ("add_frame()", "a copy of the frame shown, at the end; shows it"),
     ("set_duration(ms)", "how long the frame shown lasts"),
     ("print(x)", "write to the output below"),
+    ("fn brush(x, y, dx, dy) { … }", "a brush (Use as Brush): called for every cell a stroke passes, going (dx, dy)"),
 ];
+
+/// A brush: every cell of the stroke in a colour of the rainbow.
+pub const RAINBOW_BRUSH: &str = r##"// A brush (Use as Brush): every cell the stroke passes in a rainbow colour.
+fn brush(x, y, dx, dy) {
+    set(x, y, "█", hsv((x * 9 + y * 17) % 360, 0.6, 1.0));
+}
+"##;
+
+/// A brush: blades of grass growing up from the stroke.
+pub const GRASS_BRUSH: &str = r##"// A brush (Use as Brush): blades of grass grow up from the stroke.
+fn brush(x, y, dx, dy) {
+    let tall = rand(1, 3);
+    for i in 0..tall {
+        if get(x, y - i) == " " {
+            set(x, y - i, ["|", "/", "\\", "'"][rand(0, 3)], mix("#2f6b2f", "#9be37a", i / 3.0));
+        }
+    }
+}
+"##;
 
 /// Ready-made scripts for the Examples menu.
 pub const EXAMPLES: &[(&str, &str)] = &[
+    ("Rainbow brush", RAINBOW_BRUSH),
+    ("Grass brush", GRASS_BRUSH),
     ("Starfield", r##"// Scatters stars over the empty cells of the selection (or the whole layer).
 let a = area();
 for i in 0..(a.w * a.h / 30) {
@@ -118,6 +140,8 @@ struct State {
     ctx: ScriptContext,
     rng: u64,
     noise_seed: u64,
+    /// Cells written since this was last cleared (a brush hands them over after each call).
+    touched: Vec<(usize, usize)>,
 }
 
 impl State {
@@ -127,6 +151,7 @@ impl State {
         if let Some(old) = layer.get(x as usize, y as usize) {
             let new = f(old);
             layer.put(x as usize, y as usize, new);
+            self.touched.push((x as usize, y as usize));
         }
     }
 
@@ -201,6 +226,9 @@ fn noise(x: f64, y: f64, seed: u64) -> f64 {
 fn engine(state: &Rc<RefCell<State>>, log: &Rc<RefCell<Vec<String>>>) -> Engine {
     let mut engine = Engine::new();
     engine.set_max_operations(MAX_OPERATIONS);
+    // Debug builds of Rhai default to shallow limits (16 levels inside functions), too few for
+    // an ordinary brush; these are the release defaults.
+    engine.set_max_expr_depths(64, 32);
     let out = log.clone();
     engine.on_print(move |text| out.borrow_mut().push(text.to_owned()));
     let out = log.clone();
@@ -386,13 +414,25 @@ fn engine(state: &Rc<RefCell<State>>, log: &Rc<RefCell<Vec<String>>>) -> Engine 
     engine
 }
 
-/// Runs `code` on a copy of `doc`. An error comes with the output printed before it.
-pub fn run(code: &str, doc: &Document, ctx: ScriptContext) -> Result<ScriptOutput, (String, Vec<String>)> {
+fn new_state(doc: &Document, ctx: ScriptContext) -> Rc<RefCell<State>> {
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(1, |d| d.as_nanos() as u64)
         | 1;
-    let state = Rc::new(RefCell::new(State { doc: doc.clone(), ctx, rng: seed, noise_seed: 0 }));
+    Rc::new(RefCell::new(State { doc: doc.clone(), ctx, rng: seed, noise_seed: 0, touched: Vec::new() }))
+}
+
+/// Shown as "Line 3: …" rather than Rhai's "… (line 3, position 7)".
+fn describe(mut e: Box<EvalAltResult>) -> String {
+    match e.take_position().line() {
+        Some(line) => format!("Line {line}: {e}"),
+        None => e.to_string(),
+    }
+}
+
+/// Runs `code` on a copy of `doc`. An error comes with the output printed before it.
+pub fn run(code: &str, doc: &Document, ctx: ScriptContext) -> Result<ScriptOutput, (String, Vec<String>)> {
+    let state = new_state(doc, ctx);
     let log = Rc::new(RefCell::new(Vec::new()));
     let result = engine(&state, &log).run(code);
     let log = log.take();
@@ -401,15 +441,59 @@ pub fn run(code: &str, doc: &Document, ctx: ScriptContext) -> Result<ScriptOutpu
             let doc = Rc::try_unwrap(state).ok().expect("the engine is gone").into_inner().doc;
             Ok(ScriptOutput { doc, log })
         }
-        Err(mut e) => {
-            // Shown as "Line 3: …" rather than Rhai's "… (line 3, position 7)".
-            let message = match e.take_position().line() {
-                Some(line) => format!("Line {line}: {e}"),
-                None => e.to_string(),
-            };
-            Err((message, log))
-        }
+        Err(e) => Err((describe(e), log)),
     }
+}
+
+/// A script brush during a stroke: the script's `fn brush(x, y, dx, dy)`, called for every cell
+/// the stroke passes. It draws on a copy of the document that stays in step with the real one
+/// (nothing else changes it during a stroke) and hands back the cells it changed.
+pub struct BrushScript {
+    engine: Engine,
+    ast: AST,
+    scope: Scope<'static>,
+    state: Rc<RefCell<State>>,
+}
+
+impl BrushScript {
+    /// Compiles `code` and runs its top-level statements once.
+    pub fn start(code: &str, doc: &Document, ctx: ScriptContext) -> Result<Self, String> {
+        let state = new_state(doc, ctx);
+        let engine = engine(&state, &Rc::new(RefCell::new(Vec::new())));
+        let ast = compile_brush(&engine, code)?;
+        let mut scope = Scope::new();
+        engine.run_ast_with_scope(&mut scope, &ast).map_err(describe)?;
+        Ok(Self { engine, ast, scope, state })
+    }
+
+    /// Calls `brush` at (x, y), going (dx, dy); the active layer's cells it changed, as they are now.
+    pub fn stamp(&mut self, x: usize, y: usize, (dx, dy): (isize, isize)) -> Result<Vec<(usize, usize, Cell)>, String> {
+        self.state.borrow_mut().touched.clear();
+        let options = CallFnOptions::new().eval_ast(false).rewind_scope(true);
+        let args = (x as INT, y as INT, dx as INT, dy as INT);
+        // Whatever `brush` returns is ignored: it draws with set() and friends.
+        let _: Dynamic = self.engine.call_fn_with_options(options, &mut self.scope, &self.ast, "brush", args).map_err(describe)?;
+        let state = self.state.borrow();
+        let layer = &state.doc.layers[state.ctx.layer];
+        Ok(state.touched.iter().filter_map(|&(x, y)| layer.get(x, y).map(|c| (x, y, c.clone()))).collect())
+    }
+}
+
+/// Compiles a brush script and checks it has `fn brush(x, y, dx, dy)`.
+fn compile_brush(engine: &Engine, code: &str) -> Result<AST, String> {
+    let ast = engine.compile(code).map_err(|e| describe(e.into()))?;
+    if !ast.iter_functions().any(|f| f.name == "brush" && f.params.len() == 4) {
+        return Err("A brush needs a function brush(x, y, dx, dy)".into());
+    }
+    Ok(ast)
+}
+
+/// Can `code` be used as a brush? The reason if not.
+pub fn check_brush(code: &str) -> Result<(), String> {
+    let doc = Document::new(1, 1);
+    let ctx = ScriptContext { layer: 0, primary_char: '#', primary_fg: Color::WHITE, secondary_fg: Color::WHITE, area: (0, 0, 1, 1) };
+    let state = new_state(&doc, ctx);
+    compile_brush(&engine(&state, &Rc::new(RefCell::new(Vec::new()))), code).map(|_| ())
 }
 
 /// The commands that turn `before` into `after` (the result of a script on `layer`),

@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::document::{Cell, Document};
+use crate::script::{self, BrushScript, ScriptContext};
 use super::{Changes, DrawContext, brush_positions, bresenham, merge_changes};
 
 /// What the Brush paints.
@@ -19,6 +20,8 @@ pub enum BrushKind {
     Scatter { glyphs: String, density: f32 },
     /// One glyph per cell for the way the stroke goes: horizontal, vertical, rising, falling.
     Direction { glyphs: String },
+    /// A Rhai script's `fn brush(x, y, dx, dy)`, called for every cell the stroke passes.
+    Script { code: String },
 }
 
 /// A brush with a name, built in or saved by the user.
@@ -38,15 +41,22 @@ pub fn builtin_presets() -> Vec<BrushPreset> {
         preset("Dots", BrushKind::Scatter { glyphs: "⠁⠂⠄⠈⠐⠠⡀⢀".into(), density: 0.6 }),
         preset("ASCII Lines", BrushKind::Direction { glyphs: "-|/\\".into() }),
         preset("Box Lines", BrushKind::Direction { glyphs: "─│╱╲".into() }),
+        preset("Rainbow", BrushKind::Script { code: script::RAINBOW_BRUSH.into() }),
+        preset("Grass", BrushKind::Script { code: script::GRASS_BRUSH.into() }),
     ]
 }
 
-#[derive(Debug)]
 pub struct BrushTool {
     pub last_pos: Option<(usize, usize)>,
     pub accumulated: Changes,
     /// Makes each stroke's scatter different; changes after a stroke, so the preview shows the next one.
     seed: u64,
+    /// A script brush's engine, during a stroke.
+    script: Option<BrushScript>,
+    /// Why a script brush stopped, for the status bar.
+    pub error: Option<String>,
+    /// The press point isn't drawn yet (a direction brush waits for the stroke to show its way).
+    start_pending: bool,
 }
 
 impl Default for BrushTool {
@@ -54,7 +64,7 @@ impl Default for BrushTool {
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(1, |d| d.as_nanos() as u64);
-        Self { last_pos: None, accumulated: Changes::new(), seed }
+        Self { last_pos: None, accumulated: Changes::new(), seed, script: None, error: None, start_pending: false }
     }
 }
 
@@ -62,8 +72,25 @@ impl BrushTool {
     pub fn on_press(&mut self, doc: &mut Document, x: usize, y: usize, brush: &BrushKind, ctx: &DrawContext) {
         self.accumulated.clear();
         self.last_pos = Some((x, y));
+        if let BrushKind::Script { code } = brush {
+            let script_ctx = ScriptContext {
+                layer: doc.active_layer,
+                primary_char: ctx.current_char(),
+                primary_fg: ctx.current_fg(),
+                secondary_fg: if ctx.is_primary { ctx.secondary_fg.clone() } else { ctx.primary_fg.clone() },
+                area: (0, 0, doc.width, doc.height),
+            };
+            match BrushScript::start(code, doc, script_ctx) {
+                Ok(script) => self.script = Some(script),
+                Err(e) => {
+                    self.error = Some(e);
+                    return;
+                }
+            }
+        }
         // A direction brush waits until the stroke shows which way it goes.
-        if !matches!(brush, BrushKind::Direction { .. }) {
+        self.start_pending = matches!(brush, BrushKind::Direction { .. });
+        if !self.start_pending {
             self.draw_at(doc, x, y, brush, None, ctx);
         }
     }
@@ -72,9 +99,11 @@ impl BrushTool {
         let Some((lx, ly)) = self.last_pos else { return };
         if (lx, ly) == (x, y) { return; }
         let way = (x as isize - lx as isize, y as isize - ly as isize);
-        // The first step of a direction stroke also marks where it started.
+        // A segment starts where the last one ended, already drawn; drawing it again would
+        // overwrite what a direction or script brush put there (a corner, say). Only the first
+        // segment of a direction stroke draws its start.
         let points = bresenham(lx as isize, ly as isize, x as isize, y as isize);
-        let skip = if matches!(brush, BrushKind::Direction { .. }) && !self.accumulated.is_empty() { 1 } else { 0 };
+        let skip = if std::mem::take(&mut self.start_pending) { 0 } else { 1 };
         for (px, py) in points.into_iter().skip(skip) {
             self.draw_at(doc, px, py, brush, Some(way), ctx);
         }
@@ -83,17 +112,31 @@ impl BrushTool {
 
     pub fn on_release(&mut self) -> Changes {
         self.last_pos = None;
+        self.script = None;
         self.seed = self.seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1);
         std::mem::take(&mut self.accumulated)
     }
 
     pub fn preview(&self, doc: &Document, x: usize, y: usize, brush: &BrushKind, ctx: &DrawContext) -> Vec<(usize, usize, Cell)> {
-        if matches!(brush, BrushKind::Direction { .. }) { return Vec::new(); }
+        // Scripts may be random or slow: no preview.
+        if matches!(brush, BrushKind::Direction { .. } | BrushKind::Script { .. }) { return Vec::new(); }
         self.cells_at(doc, x, y, brush, None, ctx)
     }
 
     fn draw_at(&mut self, doc: &mut Document, cx: usize, cy: usize, brush: &BrushKind, way: Option<(isize, isize)>, ctx: &DrawContext) {
-        let cells = self.cells_at(doc, cx, cy, brush, way, ctx);
+        let cells = match &mut self.script {
+            Some(script) => match script.stamp(cx, cy, way.unwrap_or((0, 0))) {
+                Ok(cells) => cells,
+                Err(e) => {
+                    // A failing script stops; what it drew so far stays (one undo step).
+                    self.error = Some(e);
+                    self.script = None;
+                    return;
+                }
+            },
+            None if matches!(brush, BrushKind::Script { .. }) => return,
+            None => self.cells_at(doc, cx, cy, brush, way, ctx),
+        };
         let layer = doc.active_layer_mut();
         for (x, y, new) in cells {
             let Some(old) = layer.get(x, y).cloned() else { continue };
@@ -137,6 +180,7 @@ impl BrushTool {
                 let Some(&glyph) = glyphs.get(direction(way)) else { return Vec::new() };
                 painted(vec![(cx, cy, glyph)])
             }
+            BrushKind::Script { .. } => Vec::new(),
             BrushKind::Stamp { cells, recolor } => {
                 let (bh, bw) = (cells.len(), cells.first().map_or(0, Vec::len));
                 let (ox, oy) = (cx as isize - (bw / 2) as isize, cy as isize - (bh / 2) as isize);

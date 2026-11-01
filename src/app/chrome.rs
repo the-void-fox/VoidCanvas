@@ -396,6 +396,15 @@ impl AsciiArtEditor {
                 ui.add(TextEdit::singleline(glyphs).char_limit(4).desired_width(48.0).font(TextStyle::Monospace))
                     .on_hover_text("Glyphs for lines going across, down, up-right and down-right");
             }
+            BrushKind::Script { code } => {
+                if ui.button("Edit…").on_hover_text("Open the brush's script in the Script window").clicked() {
+                    let code = code.clone();
+                    self.open_script();
+                    if let Some(window) = &mut self.script {
+                        window.code = code;
+                    }
+                }
+            }
             BrushKind::Stamp { cells, recolor } => {
                 let size = format!("{}×{}", cells.first().map_or(0, Vec::len), cells.len());
                 ui.label(RichText::new(size).font(theme::mono(12.5)).color(theme::TEXT_DIM));

@@ -4,6 +4,7 @@ use eframe::egui::{self, *};
 
 use super::AsciiArtEditor;
 use crate::script::{self, EXAMPLES, REFERENCE, ScriptContext};
+use crate::tools::{ToolType, brush::BrushKind};
 use crate::{icons, theme};
 
 pub struct ScriptWindow {
@@ -65,10 +66,25 @@ impl AsciiArtEditor {
         }
     }
 
+    /// The window's script becomes the Brush, if it has `fn brush(x, y, dx, dy)`.
+    fn use_script_as_brush(&mut self) {
+        let Some(window) = &mut self.script else { return };
+        match script::check_brush(&window.code) {
+            Ok(()) => {
+                window.output = vec![(false, "The Brush paints with this script now".into())];
+                self.tool_options.brush = BrushKind::Script { code: window.code.clone() };
+                self.tool_options.brush_name = "Script Brush".into();
+                self.active_tool = ToolType::Brush;
+            }
+            Err(e) => window.output = vec![(true, e)],
+        }
+    }
+
     pub(super) fn script_window(&mut self, ctx: &egui::Context) {
         let Some(window) = &mut self.script else { return };
         let mut open = true;
         let mut run = ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Enter));
+        let mut use_as_brush = false;
         egui::Window::new("Script")
             .open(&mut open)
             .default_pos(pos2(70.0, 110.0))
@@ -77,6 +93,7 @@ impl AsciiArtEditor {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     run |= ui.button(format!("{}  Run", icons::PLAY)).on_hover_text("Ctrl+Enter").clicked();
+                    use_as_brush = ui.button("Use as Brush").on_hover_text("Paint with this script's fn brush(x, y, dx, dy)").clicked();
                     ComboBox::from_id_salt("script_examples").selected_text("Examples").show_ui(ui, |ui| {
                         for (name, code) in EXAMPLES {
                             if ui.selectable_label(false, *name).clicked() {
@@ -131,6 +148,8 @@ impl AsciiArtEditor {
             self.script = None;
         } else if run {
             self.run_script();
+        } else if use_as_brush {
+            self.use_script_as_brush();
         }
     }
 }

@@ -293,7 +293,10 @@ impl AsciiArtEditor {
                 self.stroke_changes.clear();
 
                 match tool {
-                    ToolType::Brush  => self.tools.brush.on_press(&mut self.doc, x, y, &self.tool_options.brush, &ctx),
+                    ToolType::Brush  => {
+                        self.tools.brush.on_press(&mut self.doc, x, y, &self.tool_options.brush, &ctx);
+                        self.report_brush_error();
+                    }
                     ToolType::Pixel  => {
                         let grid = self.tool_options.pixel_grid;
                         self.tools.pixel.on_press(&mut self.doc, grid.pixel_at(x, y, sub), grid, &ctx);
@@ -314,7 +317,10 @@ impl AsciiArtEditor {
                 if !self.drawing { return; }
                 let ctx = self.draw_context(self.last_primary);
                 match self.stroke_tool {
-                    ToolType::Brush  => self.tools.brush.on_drag(&mut self.doc, x, y, &self.tool_options.brush, &ctx),
+                    ToolType::Brush  => {
+                        self.tools.brush.on_drag(&mut self.doc, x, y, &self.tool_options.brush, &ctx);
+                        self.report_brush_error();
+                    }
                     ToolType::Pixel  => {
                         let grid = self.tool_options.pixel_grid;
                         self.tools.pixel.on_drag(&mut self.doc, grid.pixel_at(x, y, sub), grid, &ctx);
@@ -631,6 +637,13 @@ impl AsciiArtEditor {
         if prev_frame { self.run(Action::PrevFrame, ctx); }
         if next_frame { self.run(Action::NextFrame, ctx); }
         if play { self.run(Action::Play, ctx); }
+    }
+
+    /// A script brush that failed says why.
+    fn report_brush_error(&mut self) {
+        if let Some(e) = self.tools.brush.error.take() {
+            self.show_warning(&format!("Script brush: {e}"));
+        }
     }
 
     /// Ctrl+B: the selected part of the active layer becomes the Brush.
