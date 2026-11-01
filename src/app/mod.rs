@@ -31,13 +31,14 @@ pub(crate) mod tabs;
 
 use crate::ui::{
     canvas::{CanvasEvent, CanvasState, PreviewSettings, draw_canvas, shape_mods},
-    char_palette::CharPalette,
+    char_palette::{CharPalette, SetAction},
     layer_panel::{LayerAction, LayerPanel},
     panels::{ColorPanel, ToolOptions},
 };
 pub(crate) use file_dialog::FileAction;
 use chrome::TRANSFORMS;
 use commands::Action;
+use storage::GlyphSet;
 
 const APP_NAME: &str = "Void Canvas";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -117,7 +118,7 @@ pub struct AsciiArtEditor {
     /// Set once the user agreed to quit, so the next close request goes through.
     pub(crate) allow_close: bool,
     window_title: String,
-    settings: storage::Settings,
+    pub(crate) settings: storage::Settings,
     /// Unsaved work from a run that crashed, waiting for "Recover?".
     pub(crate) recovery: Option<storage::Autosave>,
     /// The Import Image dialog, while open.
@@ -625,6 +626,67 @@ impl AsciiArtEditor {
         if prev_frame { self.run(Action::PrevFrame, ctx); }
         if next_frame { self.run(Action::NextFrame, ctx); }
         if play { self.run(Action::Play, ctx); }
+    }
+
+    // ── The user's glyph sets ────────────────────────────────────────────────
+
+    pub(crate) fn apply_set_action(&mut self, action: SetAction, ctx: &egui::Context) {
+        let builtin = crate::ui::char_palette::CATEGORIES.len();
+        match action {
+            SetAction::New => {
+                let sets = &self.settings.glyph_sets;
+                let name = (1..)
+                    .map(|n| format!("My Glyphs {n}"))
+                    .find(|name| sets.iter().all(|s| &s.name != name))
+                    .unwrap();
+                self.settings.edit_glyph_sets(|sets| sets.push(GlyphSet { name, glyphs: String::new() }));
+                self.char_palette.category = builtin + self.settings.glyph_sets.len() - 1;
+                self.char_palette.editing = false;
+            }
+            SetAction::Rename(i, name) => {
+                let name = name.trim().to_owned();
+                if !name.is_empty() {
+                    self.settings.edit_glyph_sets(|sets| sets[i].name = name);
+                }
+            }
+            SetAction::Delete(i) => {
+                self.settings.edit_glyph_sets(|sets| { sets.remove(i); });
+                self.char_palette.category = 0;
+            }
+            SetAction::Add(i, text) => self.add_to_set(i, text.chars()),
+            SetAction::Remove(i, ch) => self.settings.edit_glyph_sets(|sets| sets[i].glyphs.retain(|c| c != ch)),
+            SetAction::FromSelection(i) => {
+                let (x0, y0, x1, y1) = match self.tools.selection.selection {
+                    Some((x1, y1, x2, y2)) => (x1, y1, x2 + 1, y2 + 1),
+                    None => (0, 0, self.doc.width, self.doc.height),
+                };
+                let layer = self.doc.active_layer();
+                let used: Vec<char> = (y0..y1).flat_map(|y| (x0..x1).filter_map(move |x| layer.get(x, y).map(|c| c.ch))).collect();
+                self.add_to_set(i, used.into_iter().filter(|&c| c != ' '));
+            }
+            SetAction::Copy(i) => {
+                ctx.copy_text(self.settings.glyph_sets[i].glyphs.clone());
+                self.show_status("Copied the set's glyphs");
+            }
+        }
+    }
+
+    /// Adds the glyphs of `chars` that `set` doesn't have yet, in order.
+    fn add_to_set(&mut self, set: usize, chars: impl Iterator<Item = char>) {
+        let mut glyphs = self.settings.glyph_sets[set].glyphs.clone();
+        let before = glyphs.chars().count();
+        for ch in chars.filter(|c| !c.is_control() && !c.is_whitespace()) {
+            if !glyphs.contains(ch) {
+                glyphs.push(ch);
+            }
+        }
+        let added = glyphs.chars().count() - before;
+        self.settings.edit_glyph_sets(|sets| sets[set].glyphs = glyphs);
+        self.show_status(match added {
+            0 => "The set has those glyphs already".to_owned(),
+            1 => "Added 1 glyph".to_owned(),
+            n => format!("Added {n} glyphs"),
+        });
     }
 
     // ── Clipboard ────────────────────────────────────────────────────────────

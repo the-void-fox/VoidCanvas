@@ -18,7 +18,7 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 | **Selection** | Move by dragging or with the arrow keys, glyph-aware Flip / Rotate (`/` ↔ `\`, `┌` ↔ `┐`, `▌` ↔ `▐`, …) |
 | **Layers** | Add / Remove / Duplicate / Merge Down / Reorder / Rename / Lock / Hide; opacity and **blend modes**: *Normal* (a glyph replaces the one below), *Combine* (glyphs join into one real character where Unicode has it: `│`+`─` = `┼`, braille dots, quarter / sixth blocks, `/`+`\` = `X` — still plain text), *Overlay* (glyphs drawn over each other; text export keeps the top one and says so) |
 | **History** | 100-step Undo / Redo for everything, with a History panel to jump to any step |
-| **Glyphs** | 21 sets (Lines, Box, Blocks, Braille, Sextants, Math, Greek, Arrows, Nerd icons, …), recent glyphs; search by name, code point (`U+2588`) or any typed character |
+| **Glyphs** | 21 sets (Lines, Box, Blocks, Braille, Sextants, Math, Greek, Arrows, Nerd icons, …) plus **your own sets** (type or paste glyphs, add the primary glyph or every glyph of the selection, edit, rename, copy as text), recent glyphs; search by name, code point (`U+2588`) or any typed character |
 | **Colors** | Primary & secondary foreground / background slots, live RGBA picker, hex input, recent colours, VGA / xterm 256 / PICO-8 / Game Boy palettes; Replace (Ctrl+H) recolours or swaps glyphs across a layer |
 | **Canvas** | Terminal-style 1:2 cells; box-drawing, block and braille characters are drawn as shapes so they join seamlessly at any zoom; fit / 100 % zoom, optional grid |
 | **Clipboard** | Copy / cut / paste selections, also as plain text to and from other programs |

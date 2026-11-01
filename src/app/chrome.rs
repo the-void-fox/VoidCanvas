@@ -429,11 +429,18 @@ impl AsciiArtEditor {
                     }
                     widgets::hline(ui);
                     ui.add_space(6.0);
+                    let mut set_action = None;
                     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.dock_tab {
-                        DockTab::Glyphs => self.char_palette.show(ui, &mut self.primary_char, &mut self.secondary_char),
+                        DockTab::Glyphs => {
+                            let sets = &self.settings.glyph_sets;
+                            set_action = self.char_palette.show(ui, &mut self.primary_char, &mut self.secondary_char, sets);
+                        }
                         DockTab::Colors => self.color_panel.show(ui),
                         DockTab::History => self.history_panel(ui),
                     });
+                    if let Some(action) = set_action {
+                        self.apply_set_action(action, ui.ctx());
+                    }
                 });
             });
     }

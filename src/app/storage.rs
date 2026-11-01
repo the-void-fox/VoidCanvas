@@ -50,6 +50,16 @@ pub struct Settings {
     /// The script last run in the Script window.
     #[serde(default)]
     pub script: String,
+    /// The user's own glyph sets.
+    #[serde(default)]
+    pub glyph_sets: Vec<GlyphSet>,
+}
+
+/// A named set of glyphs made by the user, shown in the Glyphs panel after the built-in ones.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GlyphSet {
+    pub name: String,
+    pub glyphs: String,
 }
 
 impl Settings {
@@ -94,6 +104,12 @@ impl Settings {
             self.script = code.to_owned();
             self.save();
         }
+    }
+
+    /// Changes the user's glyph sets and keeps them.
+    pub fn edit_glyph_sets(&mut self, change: impl FnOnce(&mut Vec<GlyphSet>)) {
+        change(&mut self.glyph_sets);
+        self.save();
     }
 
     pub fn clear_recent(&mut self) {

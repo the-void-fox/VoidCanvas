@@ -468,6 +468,29 @@ mod ui {
     }
 
     #[test]
+    fn users_make_their_own_glyph_sets() {
+        use crate::ui::char_palette::{CATEGORIES, SetAction};
+        let mut app = AsciiArtEditor::default();
+        let ctx = egui::Context::default();
+        app.apply_set_action(SetAction::New, &ctx);
+        assert_eq!(app.settings.glyph_sets[0].name, "My Glyphs 1");
+        assert_eq!(app.char_palette.category, CATEGORIES.len(), "the new set is shown");
+        app.apply_set_action(SetAction::Add(0, "★a★ b\n".into()), &ctx);
+        assert_eq!(app.settings.glyph_sets[0].glyphs, "★ab", "no repeats, no spaces");
+        app.apply_set_action(SetAction::Remove(0, 'a'), &ctx);
+        for (x, ch) in "xyzx".chars().enumerate() {
+            app.doc.layers[0].set(x, 0, crate::document::Cell::new(ch, crate::document::Color::WHITE, crate::document::Color::TRANSPARENT));
+        }
+        app.tools.selection.selection = Some((1, 0, 3, 0));
+        app.apply_set_action(SetAction::FromSelection(0), &ctx);
+        assert_eq!(app.settings.glyph_sets[0].glyphs, "★byzx");
+        app.apply_set_action(SetAction::Rename(0, "  Stars ".into()), &ctx);
+        assert_eq!(app.settings.glyph_sets[0].name, "Stars");
+        app.apply_set_action(SetAction::Delete(0), &ctx);
+        assert!(app.settings.glyph_sets.is_empty());
+    }
+
+    #[test]
     fn select_all_and_bracket_keys() {
         let mut harness = harness();
         harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);

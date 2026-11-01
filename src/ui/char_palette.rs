@@ -1,6 +1,7 @@
 use egui::*;
 use crate::icons;
 use crate::theme;
+use crate::app::storage::GlyphSet;
 use crate::ui::{glyph_render, widgets::section_label};
 
 pub const CATEGORIES: &[(&str, &str)] = &[
@@ -91,10 +92,31 @@ fn parse_code_point(query: &str) -> Option<char> {
 
 #[derive(Default)]
 pub struct CharPalette {
+    /// A built-in set (below `CATEGORIES.len()`) or one of the user's, after them.
     pub category: usize,
     pub search: String,
     /// Recently used glyphs, newest first.
     pub recent: Vec<char>,
+    /// Glyphs typed or pasted to add to the user's set shown.
+    adding: String,
+    /// Clicking a glyph of the user's set removes it.
+    pub editing: bool,
+    rename: String,
+}
+
+/// What the user did to their own glyph sets (indices into them).
+#[derive(Clone, Debug, PartialEq)]
+pub enum SetAction {
+    New,
+    Rename(usize, String),
+    Delete(usize),
+    /// Adds the glyphs of the text that aren't in the set yet.
+    Add(usize, String),
+    Remove(usize, char),
+    /// Adds the glyphs used in the selection (or the active layer).
+    FromSelection(usize),
+    /// Copies the set's glyphs as text.
+    Copy(usize),
 }
 
 impl CharPalette {
@@ -106,7 +128,17 @@ impl CharPalette {
     }
 
     /// Left click picks the primary glyph, right click the secondary one.
-    pub fn show(&mut self, ui: &mut Ui, primary_char: &mut char, secondary_char: &mut char) {
+    pub fn show(&mut self, ui: &mut Ui, primary_char: &mut char, secondary_char: &mut char, sets: &[GlyphSet]) -> Option<SetAction> {
+        let mut action = None;
+        let builtin = CATEGORIES.len();
+        if self.category >= builtin + sets.len() {
+            self.category = 0;
+        }
+        let own = self.category.checked_sub(builtin).filter(|&i| i < sets.len());
+        let set_name = |i: usize| match i.checked_sub(builtin) {
+            Some(own) => sets[own].name.clone(),
+            None => CATEGORIES[i].0.to_owned(),
+        };
         ui.add(
             TextEdit::singleline(&mut self.search)
                 .hint_text(format!("{}  Search: arrow, 2588, or type a glyph", icons::SEARCH))
@@ -117,24 +149,45 @@ impl CharPalette {
         if !searching {
             ComboBox::from_id_salt("glyph_category")
                 .width(ui.available_width())
-                .selected_text(CATEGORIES[self.category].0)
+                .selected_text(set_name(self.category))
                 .show_ui(ui, |ui| {
                     for (i, (name, chars)) in CATEGORIES.iter().enumerate() {
                         let sample: String = chars.chars().take(6).collect();
                         ui.selectable_value(&mut self.category, i, format!("{name}   {sample}"));
                     }
+                    ui.separator();
+                    for (i, set) in sets.iter().enumerate() {
+                        let sample: String = set.glyphs.chars().take(6).collect();
+                        ui.selectable_value(&mut self.category, builtin + i, format!("{}   {sample}", set.name));
+                    }
+                    if ui.selectable_label(false, format!("{}  New Set…", icons::PLUS)).clicked() {
+                        action = Some(SetAction::New);
+                    }
                 });
+            if let Some(i) = own {
+                action = self.own_set_tools(ui, i, &sets[i], *primary_char).or(action);
+            }
         }
 
         const CELL: f32 = 30.0;
         const GAP: f32 = 4.0;
         let cols = (((ui.available_width() + GAP) / (CELL + GAP)) as usize).max(1);
-        let mut tiles = |ui: &mut Ui, chars: &[char]| {
+        let removing = own.filter(|_| self.editing && !searching);
+        let mut removed = None;
+        let mut tiles = |ui: &mut Ui, chars: &[char], editable: bool| {
             for row in chars.chunks(cols) {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = vec2(GAP, GAP);
                     for &ch in row {
                         let resp = glyph_cell(ui, ch, CELL, ch == *primary_char, ch == *secondary_char);
+                        if editable && removing.is_some() {
+                            // Edit mode: a cross over each glyph, a click takes it out.
+                            ui.painter().text(resp.rect.right_top() + vec2(-4.0, 3.0), Align2::RIGHT_TOP, icons::CLOSE, theme::mono(10.0), theme::WARNING);
+                            if resp.clicked() {
+                                removed = Some(ch);
+                            }
+                            continue;
+                        }
                         if resp.clicked() {
                             *primary_char = ch;
                         }
@@ -150,23 +203,80 @@ impl CharPalette {
             ui.add_space(2.0);
             section_label(ui, "Recent");
             let recent: Vec<char> = self.recent.iter().take(cols).copied().collect();
-            tiles(ui, &recent);
+            tiles(ui, &recent, false);
             ui.add_space(2.0);
-            section_label(ui, CATEGORIES[self.category].0);
+            section_label(ui, &set_name(self.category));
         }
 
         let chars: Vec<char> = if searching {
             search(&self.search)
         } else {
-            CATEGORIES[self.category].1.chars().collect()
+            match own {
+                Some(i) => sets[i].glyphs.chars().collect(),
+                None => CATEGORIES[self.category].1.chars().collect(),
+            }
         };
         if chars.is_empty() {
-            ui.label(RichText::new("Nothing found").color(theme::TEXT_FAINT));
-            return;
+            let empty = if own.is_some() && !searching {
+                "Empty: type or paste glyphs above, or add the primary glyph or the selection's glyphs"
+            } else {
+                "Nothing found"
+            };
+            ui.label(RichText::new(empty).color(theme::TEXT_FAINT));
+            return action;
         }
 
         ui.add_space(4.0);
-        tiles(ui, &chars);
+        tiles(ui, &chars, true);
+        if let (Some(i), Some(ch)) = (removing, removed) {
+            action = Some(SetAction::Remove(i, ch));
+        }
+        action
+    }
+
+    /// Adding, editing and managing the user's set `i`.
+    fn own_set_tools(&mut self, ui: &mut Ui, i: usize, set: &GlyphSet, primary: char) -> Option<SetAction> {
+        let mut action = None;
+        ui.add_space(2.0);
+        let add = ui.add(
+            TextEdit::singleline(&mut self.adding)
+                .hint_text(format!("{}  Type or paste glyphs, Enter adds them", icons::PLUS))
+                .desired_width(f32::INFINITY),
+        );
+        if add.lost_focus() && ui.input(|inp| inp.key_pressed(Key::Enter)) && !self.adding.is_empty() {
+            action = Some(SetAction::Add(i, std::mem::take(&mut self.adding)));
+        }
+        ui.horizontal(|ui| {
+            if ui.button(format!("Add {primary}")).on_hover_text("Add the primary glyph").clicked() {
+                action = Some(SetAction::Add(i, primary.to_string()));
+            }
+            if ui.button("From Selection").on_hover_text("Add every glyph used in the selection (or the active layer)").clicked() {
+                action = Some(SetAction::FromSelection(i));
+            }
+            ui.toggle_value(&mut self.editing, "Edit").on_hover_text("Click glyphs to take them out of the set");
+            ui.menu_button(icons::MORE, |ui| {
+                if self.rename.is_empty() {
+                    self.rename = set.name.clone();
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    let field = ui.add(TextEdit::singleline(&mut self.rename).desired_width(140.0));
+                    if field.lost_focus() && ui.input(|inp| inp.key_pressed(Key::Enter)) {
+                        action = Some(SetAction::Rename(i, std::mem::take(&mut self.rename)));
+                        ui.close();
+                    }
+                });
+                if ui.button("Copy Glyphs as Text").clicked() {
+                    action = Some(SetAction::Copy(i));
+                    ui.close();
+                }
+                if ui.button("Delete Set").clicked() {
+                    action = Some(SetAction::Delete(i));
+                    ui.close();
+                }
+            });
+        });
+        action
     }
 }
 
