@@ -175,7 +175,7 @@ impl AsciiArtEditor {
                             .collect();
                         for (i, (name, path, modified)) in tabs.into_iter().enumerate() {
                             let active = i == self.active_tab;
-                            let tab = ui.scope_builder(UiBuilder::new().id_salt(("tab", i)).sense(Sense::click()), |ui| {
+                            let tab = ui.scope_builder(UiBuilder::new().id(Id::new(("tab", i))).sense(Sense::click()), |ui| {
                                 let hovered = ui.response().hovered();
                                 let fill = if active {
                                     theme::BG_DEEP

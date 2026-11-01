@@ -10,6 +10,8 @@ use crate::ui::glyph_render::{self, Surface};
 
 /// The editor font; also used for the UI.
 pub const FONT: &[u8] = include_bytes!("assets/FiraCode.ttf");
+/// For the glyphs FiraCode lacks (braille, sextants, many symbols).
+pub const FALLBACK_FONT: &[u8] = include_bytes!("assets/AdwaitaMono-Regular.ttf");
 
 /// Width of one exported cell in pixels; the height follows the font's proportions.
 pub const CELL_W: f32 = 10.0;
@@ -40,6 +42,7 @@ pub fn write_gif(doc: &Document, path: &std::path::Path) -> Result<(), String> {
 /// One animation frame as an image.
 pub fn render_frame(doc: &Document, frame: usize, transparent: bool) -> Result<RgbaImage, String> {
     let font = FontRef::try_from_slice(FONT).map_err(|e| format!("font error: {e}"))?;
+    let fallback = FontRef::try_from_slice(FALLBACK_FONT).map_err(|e| format!("font error: {e}"))?;
 
     // At a 1 px scale a line is exactly 1 px high, so the advance is the width : height ratio.
     let advance = font.as_scaled(PxScale::from(1.0)).h_advance(font.glyph_id('M'));
@@ -73,13 +76,15 @@ pub fn render_frame(doc: &Document, frame: usize, transparent: bool) -> Result<R
                 if glyph_render::draw_on(&mut Pixels(&mut img), *ch, x, y, fg.to_egui(), strokes) {
                     continue;
                 }
-                let glyph_id = font.glyph_id(*ch);
-                let left = px as f32 + (CELL_W - scaled.h_advance(glyph_id)) / 2.0;
+                // A glyph FiraCode lacks comes from the fallback font, at the same size.
+                let face = if font.glyph_id(*ch).0 == 0 { &fallback } else { &font };
+                let glyph_id = face.glyph_id(*ch);
+                let left = px as f32 + (CELL_W - face.as_scaled(scale).h_advance(glyph_id)) / 2.0;
                 let glyph = glyph_id.with_scale_and_position(
                     scale,
                     ab_glyph::point(left, py as f32 + scaled.ascent()),
                 );
-                let Some(outlined) = font.outline_glyph(glyph) else { continue };
+                let Some(outlined) = face.outline_glyph(glyph) else { continue };
                 let bounds = outlined.px_bounds();
                 outlined.draw(|gx, gy, coverage| {
                     let x = bounds.min.x as i32 + gx as i32;

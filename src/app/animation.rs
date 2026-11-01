@@ -229,7 +229,7 @@ impl AsciiArtEditor {
             let row = Rect::from_min_size(ui.cursor().min, vec2(LAYER_COLUMN, CEL.y));
             ui.painter().rect_filled(row, 0.0, if active { theme::SURFACE_ACTIVE } else { theme::BG_DEEP });
             ui.painter().hline(row.x_range(), row.max.y - 0.5, Stroke::new(1.0, theme::PANEL));
-            let builder = UiBuilder::new().id_salt(("timeline_layer", i)).max_rect(row).sense(Sense::click()).layout(Layout::left_to_right(Align::Center));
+            let builder = UiBuilder::new().id(Id::new(("timeline_layer", i))).max_rect(row).sense(Sense::click()).layout(Layout::left_to_right(Align::Center));
             let resp = ui.scope_builder(builder, |ui| {
                 ui.set_min_size(row.size());
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -350,7 +350,9 @@ impl AsciiArtEditor {
 
         // A last column to add a frame.
         let r = header(frames);
-        let resp = ui.interact(r, ui.id().with("new_frame"), Sense::click()).on_hover_text("New frame: a copy of the shown one");
+        // Ids follow columns: when a frame goes, the "+" takes its place under the same id
+        // (a widget changing id in place is flagged by egui, and loses its hover).
+        let resp = ui.interact(r, ui.id().with(("frame", frames)), Sense::click()).on_hover_text("New frame: a copy of the shown one");
         let color = if resp.hovered() { theme::ACCENT } else { theme::TEXT_FAINT };
         painter.text(r.center(), Align2::CENTER_CENTER, icons::PLUS, theme::mono(13.0), color);
         if resp.clicked() {

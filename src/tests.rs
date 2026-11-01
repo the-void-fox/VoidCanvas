@@ -766,6 +766,24 @@ mod ui {
         assert!(changed.is_empty(), "{changed:#?}");
     }
 
+    #[test]
+    fn deleting_frames_keeps_timeline_ids() {
+        let warnings = capture_warnings();
+        let mut harness = harness();
+        let ctx = harness.ctx.clone();
+        for _ in 0..3 {
+            harness.state_mut().run(crate::app::commands::Action::NewFrame, &ctx);
+            harness.step();
+        }
+        for _ in 0..3 {
+            harness.state_mut().run(crate::app::commands::Action::DeleteFrame, &ctx);
+            harness.step();
+            harness.step();
+        }
+        let changed: Vec<String> = warnings.lock().unwrap().iter().filter(|w| w.contains("changed id")).cloned().collect();
+        assert!(changed.is_empty(), "{changed:#?}");
+    }
+
     /// Collects `log` warnings from now on (one logger for the whole test run).
     fn capture_warnings() -> &'static std::sync::Mutex<Vec<String>> {
         struct Capture;

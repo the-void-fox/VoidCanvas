@@ -237,7 +237,8 @@ To re-render the README screenshot offscreen:
 
 Banner fonts come from [FIGlet](http://www.figlet.org/) (BSD licence, see `src/assets/figlet/LICENSE`).
 Fonts: [Fira Code](https://github.com/tonsky/FiraCode) (Nerd Font build) for the canvas and icons,
-[Inter](https://github.com/rsms/inter) for the interface — both under the SIL Open Font License.
+[Inter](https://github.com/rsms/inter) for the interface and [Adwaita Mono](https://gitlab.gnome.org/GNOME/adwaita-fonts)
+for the glyphs both lack (braille, sextants, many symbols) — all under the SIL Open Font License.
 
 ---
 

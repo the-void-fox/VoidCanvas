@@ -58,18 +58,20 @@ fn fonts() -> FontDefinitions {
         ("Inter", include_bytes!("assets/Inter-Regular.ttf").as_slice()),
         ("Inter-SemiBold", include_bytes!("assets/Inter-SemiBold.ttf").as_slice()),
         ("FiraCode", crate::export::FONT),
+        ("AdwaitaMono", crate::export::FALLBACK_FONT),
     ] {
         fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
     }
 
-    // UI text is Inter; FiraCode (a Nerd Font) supplies icons and box-drawing glyphs Inter lacks.
+    // UI text is Inter; FiraCode (a Nerd Font) supplies icons and box-drawing glyphs Inter lacks,
+    // and Adwaita Mono what both lack: braille, sextants, quarter blocks, many symbols.
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
-    proportional.splice(0..0, ["Inter".to_owned(), "FiraCode".to_owned()]);
-    let fallbacks = proportional[2..].to_vec();
-    fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "FiraCode".to_owned());
+    proportional.splice(0..0, ["Inter".to_owned(), "FiraCode".to_owned(), "AdwaitaMono".to_owned()]);
+    let fallbacks = proportional[3..].to_vec();
+    fonts.families.entry(FontFamily::Monospace).or_default().splice(0..0, ["FiraCode".to_owned(), "AdwaitaMono".to_owned()]);
     fonts.families.insert(
         FontFamily::Name(SEMIBOLD.into()),
-        ["Inter-SemiBold".to_owned(), "FiraCode".to_owned()].into_iter().chain(fallbacks).collect(),
+        ["Inter-SemiBold".to_owned(), "FiraCode".to_owned(), "AdwaitaMono".to_owned()].into_iter().chain(fallbacks).collect(),
     );
     fonts
 }
