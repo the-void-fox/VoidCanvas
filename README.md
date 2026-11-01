@@ -41,7 +41,7 @@ Download the latest release for your platform from the [Releases](../../releases
 **Requirements:** Rust 1.92+ and Cargo.
 
 ```bash
-git clone https://github.com/fantommripper/VoidCanvas
+git clone https://github.com/the-void-fox/VoidCanvas
 cd VoidCanvas
 cargo build --release
 ./target/release/void_canvas          # Linux / macOS
