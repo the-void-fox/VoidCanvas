@@ -739,7 +739,7 @@ mod ui {
         harness.step();
         harness.step();
         let browser = harness.state_mut().file_browser.as_mut().expect("the chooser is open");
-        assert_eq!((browser.dir.clone(), browser.name.as_str()), (dir.canonicalize().unwrap(), "Untitled.vc"));
+        assert_eq!((browser.dir.canonicalize().unwrap(), browser.name.as_str()), (dir.canonicalize().unwrap(), "Untitled.vc"));
         browser.name = "art".into(); // the extension gets added
         harness.get_by_label("Save").click();
         harness.step();

@@ -156,6 +156,17 @@ impl AsciiArtEditor {
     }
 }
 
+/// Windows writes canonical paths as `\\?\C:\…`; the plain `C:\…` means the same and reads better.
+fn readable(path: PathBuf) -> PathBuf {
+    if cfg!(windows)
+        && let Some(plain) = path.to_str().and_then(|p| p.strip_prefix(r"\\?\"))
+        && plain.as_bytes().get(1) == Some(&b':')
+    {
+        return PathBuf::from(plain);
+    }
+    path
+}
+
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
 }
@@ -221,7 +232,7 @@ impl FileBrowser {
 
     fn enter(&mut self, dir: PathBuf) {
         // Absolute, so the path field is meaningful and "up" always has somewhere to go.
-        self.dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+        self.dir = std::fs::canonicalize(&dir).map(readable).unwrap_or(dir);
         self.refresh();
     }
 

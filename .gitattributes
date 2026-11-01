@@ -1,0 +1,2 @@
+# Void Canvas documents are binary (older ones were JSON); never touch their line endings.
+*.vc binary

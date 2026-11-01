@@ -23,10 +23,10 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 | **Canvas** | Terminal-style 1:2 cells; box-drawing, block and braille characters are drawn as shapes so they join seamlessly at any zoom; fit / 100 % zoom, optional grid |
 | **Clipboard** | Copy / cut / paste selections, also as plain text to and from other programs |
 | **Animation** | Aseprite-style timeline (layers × frames, a dot per cel, drag frame numbers to reorder, hover for a preview, right click for duration and more), playback (`Enter`), `,` / `.` to step, onion skin of the active layer, undo that returns to the frame it changed; layers are shared by all frames; **GIF** export |
-| **Scripting** | Edit → Script…: small [Rhai](https://rhai.rs) programs draw on the active layer (cells, text, lines, colours, noise, random, frames); examples included, a whole run is one undo step |
+| **Scripting** | Edit → Script…: small [Rhai](https://rhai.rs) programs draw on the active layer (cells, text, lines, colours, noise, random, frames); examples included, `Ctrl+Enter` runs, a whole run is one undo step |
 | **Tabs** | Several documents at once, each with its own undo history, view and selection; `Ctrl+Tab` switches, `Ctrl+W` closes, quitting asks about each unsaved tab |
 | **Command palette** | `Ctrl+Shift+P` / `F1`: fuzzy-search every menu action, tool, layer action, palette and recent file; recently used commands come first |
-| **Files** | Native `.vc` format (compressed: each cell is predicted from its neighbours and the previous frame, colours optionally from a JPEG-LS-style predictor, all through an adaptive range coder; checksummed; old JSON files still open), `.txt` import / export, **ANSI** (24-bit colour) and **HTML** export, **PNG** export (opaque or transparent), animated **GIF** export, copy as text / ANSI, recent files, drag & drop, autosave of every unsaved tab with crash recovery |
+| **Files** | Compact native `.vc` format ([see below](#file-format)), `.txt` import / export, **ANSI** (24-bit colour) and **HTML** export, **PNG** export (opaque or transparent), animated **GIF** export, copy as text / ANSI, recent files, drag & drop, autosave of every unsaved tab with crash recovery |
 
 ---
 
@@ -62,10 +62,8 @@ cargo build --release
 | `Ctrl+S` | Save |
 | `Ctrl+Shift+S` | Save as… |
 | `Ctrl+W` | Close tab |
-| `Enter` | Play / stop the animation |
-| `,` / `.` | Previous / next frame |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
-| Drop a file on the window | Open `.vc` / import `.txt` |
+| Drop a file on the window | Open `.vc` / `.txt`, or import a picture |
 
 ### Edit
 
@@ -116,21 +114,45 @@ cargo build --release
 | `Ctrl+1` | Actual size (100 %) |
 | Middle-click drag | Pan |
 
+### Animation
+
+| Input | Action |
+|---|---|
+| `Enter` | Play / stop |
+| `,` / `.` | Previous / next frame |
+| Click a cel in the timeline | Go to that layer and frame |
+| Drag a frame number | Move the frame |
+| Right click a frame number | Duration, new / empty / delete frame |
+
 ---
 
 ## File Format
 
-`.vc` files are plain JSON — human-readable and version-control friendly.  
-Every layer, its cells, and their RGBA colours are stored verbatim.
+`.vc` files (format 2) are compressed with a coder made for character art
+([`src/document/codec.rs`](src/document/codec.rs)):
 
-```json
-{
-  "width": 80,
-  "height": 40,
-  "layers": [ { "name": "Background", "visible": true, "locked": false, … } ],
-  "active_layer": 0
-}
-```
+- **Prediction.** Every cell is first guessed: the same cell in the previous frame, then the
+  left, up, up-left and up-right neighbours. One yes/no decision per candidate says which one
+  it is, so runs sideways or downwards, flat areas and unchanged animation frames cost almost
+  nothing.
+- **Adaptive range coding.** Each decision is coded with a probability learned from the ones
+  before it (in contexts such as "what matched for the previous cell"), like LZMA does; a
+  near-certain decision costs well under a thousandth of a bit.
+- **Colours.** A cell that matches no neighbour is spelled out: glyph, foreground and
+  background, each tried against the neighbours first, then as an index into the file's table
+  — or, for pictures with many colours, as the error of a prediction from the neighbours
+  (the JPEG-LS edge predictor, with lossless WebP's "subtract green"). The encoder keeps
+  whichever is smaller.
+- **Safety.** A CRC-32 guards every file; damaged or cut-short files are reported, never
+  half-loaded. Each save is decoded again and compared before it is written.
+
+| Document | JSON (format 1) | `xz -9e` of the JSON | `.vc` format 2 |
+|---|---|---|---|
+| `examples/demo.vc` (72×28, 3 layers) | 1.6 MB | 2.3 KB | **818 B** |
+| 200×80 animation, 16 frames | 41.6 MB | 8.0 KB | **505 B** |
+| Photo-like picture, 160×45 half blocks | 629 KB | 15.6 KB | **11.5 KB** |
+
+Older JSON `.vc` files still open; saving them writes the new format.
 
 ---
 
@@ -173,8 +195,9 @@ src/
 │   └── file_io.rs       Open, save, export
 ├── document/
 │   ├── cell.rs          Cell & Color types, compositing
-│   ├── layer.rs         Layer (grid of cells)
-│   └── document.rs      Document (layer stack, composite, I/O)
+│   ├── layer.rs         Layer (a grid of cells per animation frame)
+│   ├── document.rs      Document (layer stack, frames, compositing)
+│   └── codec.rs         The compressed .vc format
 ├── history/
 │   ├── commands.rs      Command enum
 │   └── mod.rs           Undo / Redo stack
@@ -205,6 +228,7 @@ To re-render the README screenshot offscreen:
 | [image](https://crates.io/crates/image) | PNG / GIF encoding, picture import |
 | [rhai](https://crates.io/crates/rhai) | Embedded scripting language |
 | [ab_glyph](https://crates.io/crates/ab_glyph) | Font rasterisation for PNG export |
+| [crc32fast](https://crates.io/crates/crc32fast) | Checksums of `.vc` files |
 | [egui_kittest](https://crates.io/crates/egui_kittest) | Headless UI tests (dev only) |
 
 Banner fonts come from [FIGlet](http://www.figlet.org/) (BSD licence, see `src/assets/figlet/LICENSE`).
