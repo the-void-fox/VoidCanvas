@@ -22,7 +22,7 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 | **Colors** | Primary & secondary foreground / background slots, live RGBA picker, hex input, recent colours, VGA / xterm 256 / PICO-8 / Game Boy palettes; Replace (Ctrl+H) recolours or swaps glyphs across a layer |
 | **Canvas** | Terminal-style 1:2 cells; box-drawing, block and braille characters are drawn as shapes so they join seamlessly at any zoom; fit / 100 % zoom, optional grid |
 | **Clipboard** | Copy / cut / paste selections, also as plain text to and from other programs |
-| **Animation** | Frames with their own durations, a timeline with thumbnails, playback (`Enter`), `,` / `.` to step, onion skin, undo that returns to the frame it changed; layers are shared by all frames; **GIF** export |
+| **Animation** | Aseprite-style timeline (layers × frames, a dot per cel, drag frame numbers to reorder, hover for a preview, right click for duration and more), playback (`Enter`), `,` / `.` to step, onion skin of the active layer, undo that returns to the frame it changed; layers are shared by all frames; **GIF** export |
 | **Scripting** | Edit → Script…: small [Rhai](https://rhai.rs) programs draw on the active layer (cells, text, lines, colours, noise, random, frames); examples included, a whole run is one undo step |
 | **Tabs** | Several documents at once, each with its own undo history, view and selection; `Ctrl+Tab` switches, `Ctrl+W` closes, quitting asks about each unsaved tab |
 | **Command palette** | `Ctrl+Shift+P` / `F1`: fuzzy-search every menu action, tool, layer action, palette and recent file; recently used commands come first |

@@ -20,7 +20,7 @@ pub struct CanvasState {
     pub zoom: f32,
     pub offset: Vec2,
     pub show_grid: bool,
-    /// Animation frames before and after the shown one appear faintly under empty cells.
+    /// The active layer's previous and next animation frames show faintly where it is empty.
     pub onion_skin: bool,
     pub cursor_cell: Option<(usize, usize)>,
     /// The pointer is in the bottom half of `cursor_cell`.
@@ -228,25 +228,36 @@ pub fn draw_canvas(
 
     let font_id = theme::mono(CELL_H * state.zoom);
     let strokes = glyph_render::Strokes::new(cs.x, ppp);
-    // Onion skin: the previous frame (violet) wins over the next one (teal).
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let cell = doc.composite_cell(x, y);
+            if cell.is_empty() { continue; }
+            let rect = snap(state.cell_rect(x, y, origin));
+            draw_cell(&painter, rect, cell.ch, cell.fg.to_egui(), cell.bg.to_egui(), &font_id, strokes);
+        }
+    }
+
+    // Onion skin of the active layer (like Aseprite's "current layer" mode, so a background
+    // doesn't hide it): its previous frame (violet, wins) and next frame (teal), faintly on
+    // top wherever the layer is empty in the shown frame.
     let mut ghosts = Vec::new();
     if state.onion_skin && doc.frame_count() > 1 {
         if doc.frame > 0 { ghosts.push((doc.frame - 1, theme::ACCENT)); }
         if doc.frame + 1 < doc.frame_count() { ghosts.push((doc.frame + 1, ONION_NEXT)); }
     }
-    for y in y0..y1 {
-        for x in x0..x1 {
-            let cell = doc.composite_cell(x, y);
-            let rect = snap(state.cell_rect(x, y, origin));
-            if cell.is_empty() {
-                let ghost = ghosts.iter().map(|&(f, tint)| (doc.composite_in(f, x, y), tint)).find(|(g, _)| !g.is_empty());
+    let layer = doc.active_layer();
+    if !ghosts.is_empty() && layer.visible {
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let i = y * doc.width + x;
+                if !layer.cells_in(doc.frame)[i].is_empty() { continue; }
+                let ghost = ghosts.iter().map(|&(f, tint)| (&layer.cells_in(f)[i], tint)).find(|(g, _)| !g.is_empty());
                 if let Some((g, tint)) = ghost {
-                    let bg = if g.bg.is_transparent() { Color32::TRANSPARENT } else { tint.gamma_multiply(0.12) };
-                    draw_cell(&painter, rect, g.ch, tint.gamma_multiply(0.4), bg, &font_id, strokes);
+                    let rect = snap(state.cell_rect(x, y, origin));
+                    let bg = if g.bg.is_transparent() { Color32::TRANSPARENT } else { tint.gamma_multiply(0.18) };
+                    draw_cell(&painter, rect, g.ch, tint.gamma_multiply(0.55), bg, &font_id, strokes);
                 }
-                continue;
             }
-            draw_cell(&painter, rect, cell.ch, cell.fg.to_egui(), cell.bg.to_egui(), &font_id, strokes);
         }
     }
 
