@@ -1,7 +1,7 @@
 use egui::*;
 use crate::document::Color;
 use crate::theme;
-use crate::tools::{Channels, Mirror, border::BorderStyle};
+use crate::tools::{Channels, Mirror, border::BorderStyle, gradient::GradientShape};
 use crate::ui::widgets::{color_chip, parse_hex, section_label, to_hex};
 
 /// One of the four colour slots.
@@ -223,8 +223,11 @@ pub struct ToolOptions {
     pub border_style:  BorderStyle,
     /// The Line tool draws box-drawing lines (in `border_style`) instead of the glyph.
     pub line_box:      bool,
-    /// Index into `shade::RAMPS`.
-    pub shade_ramp:    usize,
+    /// Index into `shade::RAMPS` (Shade and Gradient).
+    pub ramp:          usize,
+    pub gradient:      GradientShape,
+    /// Gradient glyphs are dithered.
+    pub dither:        bool,
     pub channels:      Channels,
     pub mirror:        Mirror,
 }
@@ -236,7 +239,9 @@ impl Default for ToolOptions {
             filled:       false,
             border_style: BorderStyle::Single,
             line_box:     false,
-            shade_ramp:   0,
+            ramp:         0,
+            gradient:     GradientShape::Linear,
+            dither:       true,
             channels:     Channels::default(),
             mirror:       Mirror::default(),
         }

@@ -2,5 +2,5 @@ target/
 
 # Build outputs (published via GitHub Releases, not git)
 dist/
-tools/
+/tools/
 AppDir/

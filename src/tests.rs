@@ -356,6 +356,33 @@ mod ui {
     }
 
     #[test]
+    fn gradient_drag_fills_the_layer_in_one_undo_step() {
+        let mut harness = harness();
+        harness.key_press(egui::Key::U);
+        harness.step();
+        assert_eq!(harness.state().active_tool, ToolType::Gradient);
+
+        let (from, to) = (cell_pos(&harness, 0, 0), cell_pos(&harness, 20, 0));
+        harness.hover_at(from);
+        harness.step();
+        harness.event(button(from, true));
+        harness.step();
+        harness.hover_at(to);
+        harness.step();
+        assert!(harness.state().doc.layers[0].get(0, 5).unwrap().is_empty(), "only a preview while dragging");
+        harness.event(button(to, false));
+        harness.step();
+
+        let doc = &harness.state().doc;
+        assert_eq!(doc.layers[0].get(0, 5).unwrap().ch, '█', "the whole layer, not just the dragged row");
+        assert_eq!(doc.layers[0].get(30, 5).unwrap().ch, ' ', "past the end it's empty");
+        assert_eq!(harness.state().history.labels().0, vec!["Gradient"]);
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::Z);
+        harness.step();
+        assert_eq!(glyph_at(&harness, 0, 5), ' ');
+    }
+
+    #[test]
     fn select_all_and_bracket_keys() {
         let mut harness = harness();
         harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
@@ -1060,6 +1087,88 @@ mod shade_brush {
             tool.on_release();
         }
         assert_eq!(doc.layers[0].get(0, 0).unwrap().ch, '@');
+    }
+}
+
+mod gradients {
+    use super::{NONE, blue, ctx, red};
+    use crate::document::Document;
+    use crate::tools::gradient::{GradientSettings, GradientShape, gradient};
+    use crate::tools::shade::RAMPS;
+
+    fn linear(doc: &Document) -> GradientSettings {
+        GradientSettings { shape: GradientShape::Linear, ramp: RAMPS[0].1, dither: false, region: (0, 0, doc.width, doc.height) }
+    }
+
+    /// The glyphs of row `y` after a gradient.
+    fn glyphs(doc: &Document, cells: &[(usize, usize, crate::document::Cell)], y: usize) -> String {
+        (0..doc.width)
+            .map(|x| cells.iter().find(|c| (c.0, c.1) == (x, y)).map_or(doc.layers[0].get(x, y).unwrap().ch, |c| c.2.ch))
+            .collect()
+    }
+
+    #[test]
+    fn steps_from_full_to_empty_and_blends_colours() {
+        let doc = Document::new(9, 1);
+        let mut c = ctx('#', red(), NONE);
+        c.secondary_fg = blue();
+        let cells = gradient(&doc, (0, 0), (8, 0), &c, linear(&doc));
+        assert_eq!(glyphs(&doc, &cells, 0), "██▓▓▒▒░░ ");
+        assert_eq!(cells[0].2.fg, red(), "the start gets the primary colour exactly");
+        let middle = &cells.iter().find(|c| c.0 == 4).unwrap().2.fg;
+        assert!(middle.r > 0 && middle.b > 0 && middle.a == 255, "a blend, not either end: {middle:?}");
+        assert!(cells.iter().all(|c| c.2.ch != ' '), "empty cells keep their foreground");
+    }
+
+    #[test]
+    fn right_button_reverses_and_a_click_does_nothing() {
+        let doc = Document::new(9, 1);
+        let mut c = ctx('#', red(), NONE);
+        c.secondary_fg = blue();
+        c.is_primary = false;
+        let cells = gradient(&doc, (0, 0), (8, 0), &c, linear(&doc));
+        assert_eq!(cells[0].2.fg, blue());
+        assert!(gradient(&doc, (3, 0), (3, 0), &c, linear(&doc)).is_empty());
+    }
+
+    #[test]
+    fn radial_rings_account_for_tall_cells() {
+        let doc = Document::new(11, 5);
+        let settings = GradientSettings { shape: GradientShape::Radial, ..linear(&doc) };
+        let cells = gradient(&doc, (5, 2), (9, 2), &ctx('#', red(), NONE), settings);
+        let at = |x: usize, y: usize| cells.iter().find(|c| (c.0, c.1) == (x, y)).map_or(' ', |c| c.2.ch);
+        assert_eq!(at(5, 2), '█');
+        assert_eq!(at(1, 2), at(9, 2));
+        assert_eq!(at(5, 0), at(1, 2), "two rows up is as far as four columns across");
+    }
+
+    #[test]
+    fn dithering_mixes_neighbouring_glyphs() {
+        let doc = Document::new(9, 4);
+        let column = |dither: bool| {
+            let cells = gradient(&doc, (0, 0), (8, 0), &ctx('#', red(), NONE), GradientSettings { dither, ..linear(&doc) });
+            let mut glyphs: Vec<char> = (0..4).map(|y| glyphs(&doc, &cells, y).chars().nth(1).unwrap()).collect();
+            glyphs.sort();
+            glyphs.into_iter().collect::<String>()
+        };
+        // Column 1 sits halfway between ▓ and █.
+        assert_eq!(column(false), "████");
+        assert_eq!(column(true), "██▓▓");
+    }
+
+    #[test]
+    fn stays_in_the_region_and_fades_a_transparent_end() {
+        let doc = Document::new(9, 2);
+        let mut c = ctx('#', red(), NONE);
+        c.channels.glyph = false;
+        c.secondary_bg = blue();
+        let settings = GradientSettings { region: (2, 1, 6, 2), ..linear(&doc) };
+        let cells = gradient(&doc, (0, 0), (8, 0), &c, settings);
+        assert!(cells.iter().all(|c| (2..6).contains(&c.0) && c.1 == 1));
+        let bg = &cells.iter().find(|c| c.0 == 4).unwrap().2.bg;
+        assert_eq!((bg.r, bg.g, bg.b), (0, 0, 255), "transparent has no colour of its own");
+        assert!((100..160).contains(&bg.a), "half faded: {bg:?}");
+        assert_eq!(cells[0].2.bg.a, ((2.0f32 / 8.0) * 255.0).round() as u8);
     }
 }
 

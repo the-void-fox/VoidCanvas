@@ -2,6 +2,7 @@ use egui::*;
 use crate::document::Document;
 use crate::theme;
 use crate::tools::*;
+use crate::tools::gradient::GradientSettings;
 use crate::tools::shapes::{Shape, ShapeMods};
 use crate::ui::glyph_render;
 
@@ -147,6 +148,7 @@ pub enum CanvasEvent {
 pub struct PreviewSettings {
     pub shape: Option<Shape>,
     pub ramp: &'static str,
+    pub gradient: GradientSettings,
 }
 
 /// Shift constrains a shape, Alt draws it from the centre.
@@ -232,7 +234,8 @@ pub fn draw_canvas(
     let mods = ui.input(|i| i.modifiers);
     if let Some((cx, cy)) = state.cursor_cell.filter(|_| !pan_mode) {
         let preview = get_preview(active_tool, tools, doc, (cx, cy, state.cursor_lower), ctx_tool, settings, mods);
-        for (px, py, cell) in &preview {
+        let visible = |&&(px, py, _): &&(usize, usize, _)| (x0..x1).contains(&px) && (y0..y1).contains(&py);
+        for (px, py, cell) in preview.iter().filter(visible) {
             // Show the result as it will look, with the other layers.
             let cell = doc.composite_with(*px, *py, cell);
             let rect = snap(state.cell_rect(*px, *py, origin));
@@ -240,6 +243,16 @@ pub fn draw_canvas(
             let fg = Color32::from_rgba_unmultiplied(cell.fg.r, cell.fg.g, cell.fg.b, 180);
             draw_cell(&painter, rect, cell.ch, fg, bg, &font_id, strokes);
         }
+    }
+
+    // The gradient's direction while it is dragged.
+    if active_tool == ToolType::Gradient
+        && let (Some(start), Some(end)) = (tools.gradient.start, state.cursor_cell)
+    {
+        let (a, b) = (state.cell_rect(start.0, start.1, origin).center(), state.cell_rect(end.0, end.1, origin).center());
+        painter.line_segment([a, b], Stroke::new(1.5, theme::ACCENT));
+        painter.circle(a, 3.5, theme::ACCENT, Stroke::new(1.0, theme::BG_DEEP));
+        painter.circle(b, 3.5, theme::BG_DEEP, Stroke::new(1.5, theme::ACCENT));
     }
 
     draw_moving_selection(tools, doc, state, &painter, origin, &font_id, strokes);
@@ -382,6 +395,7 @@ fn get_preview(
         (ToolType::Brush, _) => tools.brush.preview(doc, x, y, ctx),
         (ToolType::Pixel, _) => tools.pixel.preview(doc, x, y * 2 + lower as usize, ctx),
         (ToolType::Shade, _) => tools.shade.preview(doc, x, y, ctx, settings.ramp),
+        (ToolType::Gradient, _) => tools.gradient.preview(doc, (x, y), ctx, settings.gradient),
         (_, Some(shape)) => tools.shape.preview(doc, shape, (x, y), shape_mods(mods), ctx),
         _ => vec![],
     }

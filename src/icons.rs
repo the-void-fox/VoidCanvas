@@ -3,6 +3,7 @@
 pub const BRUSH: &str = "\u{F00E3}";
 pub const ERASER: &str = "\u{F01FE}";
 pub const FILL: &str = "\u{F0266}";
+pub const GRADIENT: &str = "\u{F06A0}";
 pub const LINE: &str = "\u{F055E}";
 pub const RECTANGLE: &str = "\u{F0E5F}";
 pub const ELLIPSE: &str = "\u{F0EA1}";

@@ -6,7 +6,7 @@ use super::{AsciiArtEditor, DockTab, PendingAction, file_dialog::FileAction};
 use crate::glyphs::Transform;
 use crate::icons;
 use crate::theme;
-use crate::tools::{ToolType, border::BorderStyle, shade::RAMPS};
+use crate::tools::{ToolType, border::BorderStyle, gradient::GradientShape, shade::RAMPS};
 use crate::ui::widgets::{self, color_chip, icon_button, icon_toggle, tab_bar, to_hex, vdivider};
 
 /// Selection transforms with their menu label and shortcut.
@@ -209,6 +209,10 @@ impl AsciiArtEditor {
                             }
                         }
                         ToolType::Fill => hint(ui, "Fills connected cells that look the same"),
+                        ToolType::Gradient => {
+                            ui.selectable_value(&mut options.gradient, GradientShape::Linear, "Linear");
+                            ui.selectable_value(&mut options.gradient, GradientShape::Radial, "Radial");
+                        }
                         ToolType::Eyedropper => hint(ui, "Click: pick into primary · right click: secondary · Alt+click works with any drawing tool"),
                         ToolType::Text => hint(ui, "Click and type · Enter: next line · Esc: done"),
                         ToolType::Select => {
@@ -235,13 +239,19 @@ impl AsciiArtEditor {
                             }
                         }
                     }
-                    if tool == ToolType::Shade {
+                    if matches!(tool, ToolType::Shade | ToolType::Gradient) {
                         vdivider(ui);
                         ui.label("Ramp");
                         for (i, (name, ramp)) in RAMPS.iter().enumerate() {
                             let label = format!("{name}  {}", ramp.trim_start());
-                            ui.selectable_value(&mut self.tool_options.shade_ramp, i, label);
+                            ui.selectable_value(&mut self.tool_options.ramp, i, label);
                         }
+                        if tool == ToolType::Gradient {
+                            ui.toggle_value(&mut self.tool_options.dither, "Dither")
+                                .on_hover_text("Mix neighbouring ramp glyphs for smoother steps");
+                        }
+                    }
+                    if tool == ToolType::Shade {
                         vdivider(ui);
                         ui.label("Colour");
                         let channels = &mut self.tool_options.channels;
@@ -289,6 +299,9 @@ impl AsciiArtEditor {
                     } else if tool == ToolType::Shade {
                         vdivider(ui);
                         hint(ui, "Each stroke one step denser · right button: lighter");
+                    } else if tool == ToolType::Gradient {
+                        vdivider(ui);
+                        hint(ui, "Drag across the selection or the layer · right button: reversed");
                     } else if tool == ToolType::Pixel {
                         vdivider(ui);
                         hint(ui, "Square pixels from half blocks · right button: secondary colour · Alt+click: pick");

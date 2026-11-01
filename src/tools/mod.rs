@@ -1,6 +1,7 @@
 pub mod brush;
 pub mod eraser;
 pub mod fill;
+pub mod gradient;
 pub mod shapes;
 pub mod border;
 pub mod pixel;
@@ -22,6 +23,7 @@ pub enum ToolType {
     Eyedropper,
     Eraser,
     Fill,
+    Gradient,
     Rectangle,
     Ellipse,
     Line,
@@ -34,7 +36,7 @@ impl ToolType {
     pub fn groups() -> &'static [&'static [ToolType]] {
         &[
             &[ToolType::Select],
-            &[ToolType::Brush, ToolType::Pixel, ToolType::Shade, ToolType::Eraser, ToolType::Fill, ToolType::Eyedropper],
+            &[ToolType::Brush, ToolType::Pixel, ToolType::Shade, ToolType::Eraser, ToolType::Fill, ToolType::Gradient, ToolType::Eyedropper],
             &[ToolType::Text],
             &[ToolType::Line, ToolType::Rectangle, ToolType::Ellipse, ToolType::Border],
         ]
@@ -59,6 +61,7 @@ impl ToolType {
             ToolType::Eyedropper => icons::EYEDROPPER,
             ToolType::Eraser    => icons::ERASER,
             ToolType::Fill      => icons::FILL,
+            ToolType::Gradient  => icons::GRADIENT,
             ToolType::Rectangle => icons::RECTANGLE,
             ToolType::Ellipse   => icons::ELLIPSE,
             ToolType::Line      => icons::LINE,
@@ -77,6 +80,7 @@ impl ToolType {
             ToolType::Eyedropper => 'I',
             ToolType::Eraser    => 'E',
             ToolType::Fill      => 'F',
+            ToolType::Gradient  => 'U',
             ToolType::Rectangle => 'R',
             ToolType::Ellipse   => 'O',
             ToolType::Line      => 'L',
@@ -94,6 +98,7 @@ impl ToolType {
             ToolType::Eyedropper => "Eyedropper",
             ToolType::Eraser    => "Eraser",
             ToolType::Fill      => "Fill",
+            ToolType::Gradient  => "Gradient",
             ToolType::Rectangle => "Rectangle",
             ToolType::Ellipse   => "Ellipse",
             ToolType::Line      => "Line",

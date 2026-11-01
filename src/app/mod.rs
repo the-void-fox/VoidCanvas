@@ -9,6 +9,7 @@ use crate::tools::{
     brush::BrushTool,
     eraser::EraserTool,
     fill::FillTool,
+    gradient::{GradientSettings, GradientTool},
     shapes::{Shape, ShapeTool},
     selection::{SelectionTool, content_to_text, text_to_content},
     text::TextTool,
@@ -44,6 +45,7 @@ pub struct ToolState {
     pub shade:     ShadeTool,
     pub eraser:    EraserTool,
     pub fill:      FillTool,
+    pub gradient:  GradientTool,
     pub shape:     ShapeTool,
     pub selection: SelectionTool,
     pub text:      TextTool,
@@ -264,11 +266,12 @@ impl AsciiArtEditor {
                     ToolType::Brush  => { self.tools.brush.on_press(&mut self.doc, x, y, &ctx); }
                     ToolType::Pixel  => self.tools.pixel.on_press(&mut self.doc, x, y * 2 + lower as usize, &ctx),
                     ToolType::Shade  => {
-                        let ramp = self.shade_ramp();
+                        let ramp = self.ramp();
                         self.tools.shade.on_press(&mut self.doc, x, y, &ctx, ramp);
                     }
                     ToolType::Eraser => { self.tools.eraser.on_press(&mut self.doc, x, y, &ctx); }
                     ToolType::Select => { self.tools.selection.on_press(&self.doc, x, y); }
+                    ToolType::Gradient => self.tools.gradient.on_press(x, y),
                     t if t.is_shape() => self.tools.shape.on_press(x, y),
                     _ => {}
                 }
@@ -281,7 +284,7 @@ impl AsciiArtEditor {
                     ToolType::Brush  => { self.tools.brush.on_drag(&mut self.doc, x, y, &ctx); }
                     ToolType::Pixel  => self.tools.pixel.on_drag(&mut self.doc, x, y * 2 + lower as usize, &ctx),
                     ToolType::Shade  => {
-                        let ramp = self.shade_ramp();
+                        let ramp = self.ramp();
                         self.tools.shade.on_drag(&mut self.doc, x, y, &ctx, ramp);
                     }
                     ToolType::Eraser => { self.tools.eraser.on_drag(&mut self.doc, x, y, &ctx); }
@@ -305,6 +308,10 @@ impl AsciiArtEditor {
                     ToolType::Shade  => self.tools.shade.on_release(),
                     ToolType::Eraser => self.tools.eraser.on_release(),
                     ToolType::Select => self.tools.selection.on_release(&mut self.doc),
+                    ToolType::Gradient => {
+                        let settings = self.gradient_settings();
+                        self.tools.gradient.on_release(&mut self.doc, (x, y), &ctx, settings)
+                    }
                     tool => match self.shape_for(tool) {
                         Some(shape) => self.tools.shape.on_release(&mut self.doc, shape, (x, y), shape_mods(mods), &ctx),
                         None => Changes::new(),
@@ -319,8 +326,18 @@ impl AsciiArtEditor {
         }
     }
 
-    fn shade_ramp(&self) -> &'static str {
-        RAMPS[self.tool_options.shade_ramp.min(RAMPS.len() - 1)].1
+    fn ramp(&self) -> &'static str {
+        RAMPS[self.tool_options.ramp.min(RAMPS.len() - 1)].1
+    }
+
+    /// The Gradient tool covers the selection, or the whole layer.
+    fn gradient_settings(&self) -> GradientSettings {
+        let region = match self.tools.selection.selection {
+            Some((x1, y1, x2, y2)) => (x1, y1, x2 + 1, y2 + 1),
+            None => (0, 0, self.doc.width, self.doc.height),
+        };
+        let options = &self.tool_options;
+        GradientSettings { shape: options.gradient, ramp: self.ramp(), dither: options.dither, region }
     }
 
     /// The shape a shape tool draws with the current options.
@@ -339,7 +356,7 @@ impl AsciiArtEditor {
     /// Puts what a stroke paints with into the Recent rows of the dock.
     fn remember_used(&mut self, ctx: &DrawContext) {
         let channels = ctx.channels;
-        if channels.glyph && !matches!(self.active_tool, ToolType::Pixel | ToolType::Shade) {
+        if channels.glyph && !matches!(self.active_tool, ToolType::Pixel | ToolType::Shade | ToolType::Gradient) {
             self.char_palette.remember(ctx.current_char());
         }
         if channels.fg || self.active_tool == ToolType::Pixel {
@@ -902,7 +919,11 @@ impl eframe::App for AsciiArtEditor {
             .frame(egui::Frame::NONE.fill(theme::BG_DEEP))
             .show(ui, |ui| {
                 let ctx_tool = self.draw_context(true);
-                let settings = PreviewSettings { shape: self.shape_for(self.active_tool), ramp: self.shade_ramp() };
+                let settings = PreviewSettings {
+                    shape: self.shape_for(self.active_tool),
+                    ramp: self.ramp(),
+                    gradient: self.gradient_settings(),
+                };
                 // Space + drag pans, like in Photoshop.
                 let pan_mode = !self.drawing
                     && !self.typing()
