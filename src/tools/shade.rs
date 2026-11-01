@@ -6,12 +6,6 @@ use std::collections::HashSet;
 use crate::document::{Cell, Document};
 use super::{Changes, DrawContext, bresenham, brush_positions, merge_changes};
 
-/// Density ramps from empty to full.
-pub const RAMPS: &[(&str, &str)] = &[
-    ("Blocks", " ░▒▓█"),
-    ("ASCII", " .:-=+*#%@"),
-];
-
 #[derive(Default, Debug)]
 pub struct ShadeTool {
     last: Option<(usize, usize)>,

@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime};
 use serde::{Deserialize, Serialize};
 
 use crate::document::Document;
+use crate::library::{Palette, Ramp, builtin_palettes, builtin_ramps};
 
 const MAX_RECENT: usize = 10;
 
@@ -56,6 +57,12 @@ pub struct Settings {
     /// Brushes the user saved.
     #[serde(default)]
     pub brushes: Vec<crate::tools::brush::BrushPreset>,
+    /// The user's own density ramps.
+    #[serde(default)]
+    pub ramps: Vec<Ramp>,
+    /// The user's own colour palettes.
+    #[serde(default)]
+    pub palettes: Vec<Palette>,
 }
 
 /// A named set of glyphs made by the user, shown in the Glyphs panel after the built-in ones.
@@ -112,6 +119,31 @@ impl Settings {
     /// Changes the user's glyph sets and keeps them.
     pub fn edit_glyph_sets(&mut self, change: impl FnOnce(&mut Vec<GlyphSet>)) {
         change(&mut self.glyph_sets);
+        self.save();
+    }
+
+    /// Every density ramp: the built-in ones, then the user's.
+    pub fn all_ramps(&self) -> Vec<Ramp> {
+        builtin_ramps().into_iter().chain(self.ramps.iter().cloned()).collect()
+    }
+
+    /// Every colour palette: the built-in ones, then the user's.
+    pub fn all_palettes(&self) -> Vec<Palette> {
+        builtin_palettes().into_iter().chain(self.palettes.iter().cloned()).collect()
+    }
+
+    /// Every brush: the built-in ones, then the user's.
+    pub fn all_brushes(&self) -> Vec<crate::tools::brush::BrushPreset> {
+        crate::tools::brush::builtin_presets().into_iter().chain(self.brushes.iter().cloned()).collect()
+    }
+
+    pub fn edit_ramps(&mut self, change: impl FnOnce(&mut Vec<Ramp>)) {
+        change(&mut self.ramps);
+        self.save();
+    }
+
+    pub fn edit_palettes(&mut self, change: impl FnOnce(&mut Vec<Palette>)) {
+        change(&mut self.palettes);
         self.save();
     }
 

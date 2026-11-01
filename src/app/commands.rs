@@ -6,7 +6,7 @@ use super::{AsciiArtEditor, DockTab, PendingAction, TRANSFORMS, file_dialog::Fil
 use crate::glyphs::Transform;
 use crate::theme;
 use crate::tools::ToolType;
-use crate::ui::{layer_panel::LayerAction, panels::PALETTES};
+use crate::ui::layer_panel::LayerAction;
 
 #[derive(Clone, PartialEq)]
 pub enum Action {
@@ -42,6 +42,7 @@ pub enum Action {
     Replace,
     InsertBanner,
     Script,
+    Library,
     BrushFromSelection,
     New3D,
     New3DFromSelection,
@@ -165,9 +166,10 @@ impl AsciiArtEditor {
             add("Tool", tool.name(), tool_key(tool), Action::Tool(tool));
         }
         add("Colour", "Swap Primary and Secondary", "X", Action::SwapSlots);
-        for (i, name) in PALETTES.iter().enumerate() {
-            add("Palette", name, "", Action::Palette(i));
+        for (i, palette) in self.settings.all_palettes().iter().enumerate() {
+            add("Palette", &palette.name, "", Action::Palette(i));
         }
+        add("Edit", "Library…", "", Action::Library);
 
         let layers = self.doc.layers.len();
         let active = self.doc.active_layer;
@@ -261,6 +263,7 @@ impl AsciiArtEditor {
             Action::Replace => self.open_replace(),
             Action::InsertBanner => self.open_banner(),
             Action::Script => self.open_script(),
+            Action::Library => self.open_library(super::library::LibraryTab::GlyphSets),
             Action::BrushFromSelection => self.brush_from_selection(),
             Action::New3D => self.apply_layer_action(LayerAction::New3D),
             Action::New3DFromSelection => {

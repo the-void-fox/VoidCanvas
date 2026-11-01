@@ -53,11 +53,13 @@ pub struct ConvertSettings {
     /// Contrast factor, 1 = unchanged.
     pub contrast: f32,
     pub dither: bool,
+    /// The density ramp for the ASCII mode, empty to full.
+    pub ramp: String,
 }
 
 impl Default for ConvertSettings {
     fn default() -> Self {
-        Self { width: 80, mode: ConvertMode::HalfBlocks, color: true, invert: false, brightness: 0.0, contrast: 1.0, dither: true }
+        Self { width: 80, mode: ConvertMode::HalfBlocks, color: true, invert: false, brightness: 0.0, contrast: 1.0, dither: true, ramp: " .:-=+*#%@".into() }
     }
 }
 
@@ -101,7 +103,8 @@ pub fn convert(image: &RgbaImage, settings: &ConvertSettings) -> Vec<Vec<Cell>> 
 
     match settings.mode {
         ConvertMode::Ascii | ConvertMode::Shades => {
-            let ramp: Vec<char> = if settings.mode == ConvertMode::Ascii { " .:-=+*#%@" } else { " ░▒▓█" }.chars().collect();
+            let ramp: Vec<char> = if settings.mode == ConvertMode::Ascii { settings.ramp.as_str() } else { " ░▒▓█" }.chars().collect();
+            let ramp = if ramp.len() < 2 { vec![' ', '#'] } else { ramp };
             let levels = quantize(&mut tone, gw, gh, ramp.len(), settings.dither);
             grid(width, height, |x, y| {
                 let ch = ramp[levels[y * gw + x]];

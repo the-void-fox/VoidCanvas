@@ -24,6 +24,7 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 | **Clipboard** | Copy / cut / paste selections, also as plain text to and from other programs |
 | **Animation** | Aseprite-style timeline (layers × frames, a dot per cel, drag frame numbers to reorder, hover for a preview, right click for duration and more), playback (`Enter`), `,` / `.` to step, onion skin of the active layer, undo that returns to the frame it changed; layers are shared by all frames; **GIF** export |
 | **3D layers** | A layer drawn from a 3D scene, re-editable any time (like Photoshop's 3D layers): cube, sphere, torus, cylinder, cone, extruded **FIGlet text**, or **the selected art pushed out into blocks** of its own colours; turn it by dragging, light it, draw it as shaded ASCII (`.:-=+*#%@`, like the spinning donut), dithered braille or colour half blocks; spin it per frame or make a **turntable** animation in one click; rasterize to paint on it |
+| **Library** | Edit → Library…: one place for glyph sets, **shade ramps**, brushes and colour palettes — the built-in ones and your own; add, copy, edit, reorder, delete, and share any of them as text. The same ramps serve Shade, Gradient, 3D layers and picture import |
 | **Scripting** | Edit → Script…: small [Rhai](https://rhai.rs) programs draw on the active layer (cells, text, lines, colours, noise, random, frames); examples included, `Ctrl+Enter` runs, a whole run is one undo step; **Use as Brush** paints with a script's `fn brush(x, y, dx, dy)` |
 | **Tabs** | Several documents at once, each with its own undo history, view and selection; `Ctrl+Tab` switches, `Ctrl+W` closes, quitting asks about each unsaved tab |
 | **Command palette** | `Ctrl+Shift+P` / `F1`: fuzzy-search every menu action, tool, layer action, palette and recent file; recently used commands come first |
@@ -178,6 +179,7 @@ src/
 ├── figlet.rs            FIGlet banner fonts
 ├── export.rs            PNG / GIF / ANSI / HTML export
 ├── script.rs            Rhai scripting API
+├── library.rs           Built-in shade ramps and palettes
 ├── tests.rs             Model / history tests + headless UI tests (egui_kittest)
 ├── dev.rs               Debug-only helpers (VOID_CANVAS_SCREENSHOT=out.png)
 ├── app/
@@ -188,6 +190,7 @@ src/
 │   ├── import.rs        Import Image dialog
 │   ├── replace.rs       Replace dialog
 │   ├── scripting.rs     Script window
+│   ├── library.rs       The Library window
 │   ├── banner.rs        Insert Banner dialog
 │   ├── three_d.rs       The 3D window
 │   ├── animation.rs     Frames, playback, timeline

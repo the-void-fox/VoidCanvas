@@ -117,6 +117,8 @@ pub enum SetAction {
     FromSelection(usize),
     /// Copies the set's glyphs as text.
     Copy(usize),
+    /// Open the Library on glyph sets.
+    Manage,
 }
 
 impl CharPalette {
@@ -162,6 +164,9 @@ impl CharPalette {
                     }
                     if ui.selectable_label(false, format!("{}  New Set…", icons::PLUS)).clicked() {
                         action = Some(SetAction::New);
+                    }
+                    if ui.selectable_label(false, "Manage…").clicked() {
+                        action = Some(SetAction::Manage);
                     }
                 });
             if let Some(i) = own {

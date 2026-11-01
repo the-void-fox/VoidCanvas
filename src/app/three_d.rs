@@ -6,7 +6,6 @@ use super::AsciiArtEditor;
 use crate::document::scene::{Object3D, Scene3D, Style3D};
 use crate::document::{Cell, Layer};
 use crate::history::Command;
-use crate::tools::shade::RAMPS;
 use crate::{figlet, icons, theme};
 
 pub struct ThreeDWindow {
@@ -131,6 +130,7 @@ impl AsciiArtEditor {
         let mut scene = (*current).clone();
         let mut frames = window.turntable_frames;
         let (mut open, mut rasterize, mut turntable, mut take_selection) = (true, false, false, false);
+        let mut manage_ramps = false;
         let has_selection = self.tools.selection.selection.is_some();
         let name = self.doc.layers[index].name.clone();
 
@@ -200,11 +200,13 @@ impl AsciiArtEditor {
                         }
                     });
                     if scene.style == Style3D::Shade {
-                        ComboBox::from_id_salt("three_d_ramp").selected_text(scene.ramp.trim_start()).show_ui(ui, |ui| {
-                            for ramp in RAMPS.iter().map(|r| r.1).chain([" .:-=+*#%@", " .,:;ox%#@"]) {
-                                ui.selectable_value(&mut scene.ramp, ramp.to_owned(), ramp.trim_start());
-                            }
-                        });
+                        let ramps = self.settings.all_ramps();
+                        let name = ramps.iter().find(|r| r.glyphs == scene.ramp).map_or("Custom", |r| r.name.as_str()).to_owned();
+                        match super::chrome::ramp_menu(ui, "three_d_ramp", &name, &ramps) {
+                            Some(Some(ramp)) => scene.ramp = ramp.glyphs,
+                            Some(None) => manage_ramps = true,
+                            None => {}
+                        }
                     }
                     let mut color = scene.color.to_egui();
                     if color_picker::color_edit_button_srgba(ui, &mut color, color_picker::Alpha::Opaque).changed() {
@@ -298,6 +300,9 @@ impl AsciiArtEditor {
         if !open {
             self.commit_3d();
             self.three_d = None;
+        }
+        if manage_ramps {
+            self.open_library(super::library::LibraryTab::Ramps);
         }
     }
 }

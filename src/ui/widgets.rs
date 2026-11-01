@@ -140,3 +140,23 @@ pub fn hline(ui: &mut Ui) {
     let (r, _) = ui.allocate_exact_size(vec2(rect.width(), 1.0), Sense::hover());
     ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, theme::BORDER));
 }
+
+/// `glyphs` drawn in cells of `cell` points wide, wrapping to the width available — box, block
+/// and braille glyphs as on the canvas.
+pub fn glyph_strip(ui: &mut Ui, glyphs: &str, cell: f32) {
+    let chars: Vec<char> = glyphs.chars().collect();
+    if chars.is_empty() { return; }
+    let per_row = ((ui.available_width() / cell) as usize).max(1);
+    let rows = chars.len().div_ceil(per_row);
+    let size = vec2(per_row.min(chars.len()) as f32 * cell, rows as f32 * cell * 2.0);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 4.0, theme::CANVAS_BG);
+    let ppp = ui.ctx().pixels_per_point();
+    let strokes = crate::ui::glyph_render::Strokes::new(cell, ppp);
+    for (i, &ch) in chars.iter().enumerate() {
+        let min = rect.min + vec2((i % per_row) as f32 * cell, (i / per_row) as f32 * cell * 2.0);
+        let r = crate::ui::glyph_render::snap_rect(Rect::from_min_size(min, vec2(cell, cell * 2.0)), ppp);
+        crate::ui::canvas::draw_cell(&painter, r, ch, theme::TEXT, Color32::TRANSPARENT, &theme::mono(cell * 2.0 * 0.8), strokes);
+    }
+}

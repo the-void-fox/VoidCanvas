@@ -1196,8 +1196,7 @@ mod glyph_sets {
 
     #[test]
     fn palettes_have_their_sizes() {
-        use crate::ui::panels::{PALETTES, palette};
-        let sizes: Vec<usize> = (0..PALETTES.len()).map(|i| palette(i).len()).collect();
+        let sizes: Vec<usize> = crate::library::builtin_palettes().iter().map(|p| p.colors.len()).collect();
         assert_eq!(&sizes[..4], &[16, 256, 16, 4]);
     }
 }
@@ -1360,11 +1359,11 @@ mod image_convert {
 mod shade_brush {
     use super::{NONE, ctx, red};
     use crate::document::Document;
-    use crate::tools::shade::{RAMPS, ShadeTool};
+    use crate::tools::shade::ShadeTool;
 
     #[test]
     fn strokes_step_density_once_per_stroke() {
-        let blocks = RAMPS[0].1;
+        let blocks = " ░▒▓█";
         let mut doc = Document::new(5, 1);
         let mut tool = ShadeTool::default();
         let at = |doc: &Document| doc.layers[0].get(2, 0).unwrap().ch;
@@ -1393,7 +1392,7 @@ mod shade_brush {
         doc.layers[0].set(0, 0, super::glyph('%'));
         let mut tool = ShadeTool::default();
         for _ in 0..3 {
-            tool.on_press(&mut doc, 0, 0, &ctx('#', red(), NONE), RAMPS[1].1);
+            tool.on_press(&mut doc, 0, 0, &ctx('#', red(), NONE), " .:-=+*#%@");
             tool.on_release();
         }
         assert_eq!(doc.layers[0].get(0, 0).unwrap().ch, '@');
@@ -2163,14 +2162,50 @@ mod three_d {
     }
 }
 
+mod library_pools {
+    use crate::app::AsciiArtEditor;
+    use crate::app::library::LibraryTab;
+    use crate::library::builtin_ramps;
+
+    #[test]
+    fn built_in_ramps_are_all_different() {
+        let ramps = builtin_ramps();
+        for (i, a) in ramps.iter().enumerate() {
+            assert!(a.glyphs.chars().count() > 1, "{}", a.name);
+            assert!(ramps[i + 1..].iter().all(|b| b.glyphs != a.glyphs && b.name != a.name), "{} twice", a.name);
+        }
+    }
+
+    #[test]
+    fn entries_are_made_copied_moved_and_shared() {
+        let mut app = AsciiArtEditor::default();
+        let builtin = builtin_ramps().len();
+        app.open_library(LibraryTab::Ramps);
+        app.library_new(LibraryTab::Ramps, Some(1));
+        assert_eq!(app.settings.ramps[0].name, "ASCII copy");
+        assert_eq!(app.settings.ramps[0].glyphs, builtin_ramps()[1].glyphs);
+        assert_eq!(app.library.as_ref().unwrap().selected, builtin, "the new entry is selected");
+        app.library_new(LibraryTab::Ramps, Some(builtin));
+        assert_eq!(app.settings.ramps[1].name, "ASCII copy copy");
+
+        // Shared as text, added under a name of its own.
+        let text = r#"{"ramp":{"name":"ASCII copy","glyphs":" -=#"}}"#;
+        assert_eq!(app.library_add_shared(text), Ok(LibraryTab::Ramps));
+        assert_eq!(app.settings.ramps[2].name, "ASCII copy 2");
+        assert!(app.library_add_shared("hello").is_err());
+        let palette = r##"{"palette":{"name":"Two","colors":[{"r":1,"g":2,"b":3,"a":255},{"r":0,"g":0,"b":0,"a":255}]}}"##;
+        assert_eq!(app.library_add_shared(palette), Ok(LibraryTab::Palettes));
+        assert_eq!(app.settings.all_palettes().last().unwrap().colors.len(), 2);
+    }
+}
+
 mod gradients {
     use super::{NONE, blue, ctx, red};
     use crate::document::Document;
     use crate::tools::gradient::{GradientSettings, GradientShape, gradient};
-    use crate::tools::shade::RAMPS;
 
     fn linear(doc: &Document) -> GradientSettings {
-        GradientSettings { shape: GradientShape::Linear, ramp: RAMPS[0].1, dither: false, region: (0, 0, doc.width, doc.height) }
+        GradientSettings { shape: GradientShape::Linear, ramp: " ░▒▓█", dither: false, region: (0, 0, doc.width, doc.height) }
     }
 
     /// The glyphs of row `y` after a gradient.

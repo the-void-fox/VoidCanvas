@@ -55,6 +55,9 @@ impl AsciiArtEditor {
     }
 
     pub(super) fn image_import_dialog(&mut self, ctx: &egui::Context) {
+        if self.image_import.is_none() { return; }
+        let ramps = self.settings.all_ramps();
+        let mut manage_ramps = false;
         let Some(import) = &mut self.image_import else { return };
         if import.converted.as_ref() != Some(&import.settings) {
             import.result = convert(&import.source, &import.settings);
@@ -77,6 +80,14 @@ impl AsciiArtEditor {
                 ui.horizontal(|ui| {
                     for mode in ConvertMode::ALL {
                         ui.selectable_value(&mut s.mode, mode, mode.name());
+                    }
+                    if s.mode == ConvertMode::Ascii {
+                        let name = ramps.iter().find(|r| r.glyphs == s.ramp).map_or("Custom", |r| r.name.as_str()).to_owned();
+                        match super::chrome::ramp_menu(ui, "import_ramp", &name, &ramps) {
+                            Some(Some(ramp)) => s.ramp = ramp.glyphs,
+                            Some(None) => manage_ramps = true,
+                            None => {}
+                        }
                     }
                 });
                 ui.end_row();
@@ -125,6 +136,9 @@ impl AsciiArtEditor {
             Some(true) => self.finish_image_import(),
             Some(false) => self.image_import = None,
             None => {}
+        }
+        if manage_ramps {
+            self.open_library(super::library::LibraryTab::Ramps);
         }
     }
 

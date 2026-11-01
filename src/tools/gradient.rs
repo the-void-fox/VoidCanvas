@@ -14,10 +14,10 @@ pub enum GradientShape {
 
 /// Options of a gradient, besides the slots and channels in [`DrawContext`].
 #[derive(Clone, Copy, Debug)]
-pub struct GradientSettings {
+pub struct GradientSettings<'a> {
     pub shape: GradientShape,
     /// Density ramp from empty to full; the drag starts at full.
-    pub ramp: &'static str,
+    pub ramp: &'a str,
     /// Ordered dithering between neighbouring ramp glyphs.
     pub dither: bool,
     /// Cells it covers: `x0..x1`, `y0..y1`.

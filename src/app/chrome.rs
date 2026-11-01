@@ -6,7 +6,9 @@ use super::{AsciiArtEditor, DockTab, commands::Action, file_dialog::FileAction};
 use crate::glyphs::Transform;
 use crate::icons;
 use crate::theme;
-use crate::tools::{ToolType, border::BorderStyle, brush::{BrushKind, BrushPreset, builtin_presets}, gradient::GradientShape, pixel::PixelGrid, shade::RAMPS};
+use crate::tools::{ToolType, border::BorderStyle, brush::{BrushKind, BrushPreset, builtin_presets}, gradient::GradientShape, pixel::PixelGrid};
+use crate::library::Ramp;
+use super::library::LibraryTab;
 use crate::ui::panels::ToolOptions;
 use crate::ui::widgets::{self, color_chip, icon_button, icon_toggle, tab_bar, to_hex, vdivider};
 
@@ -114,6 +116,9 @@ impl AsciiArtEditor {
                         ui.separator();
                         if ui.add(Button::new("Replace…").shortcut_text("Ctrl+H")).clicked() { self.open_replace(); }
                         if ui.button("Script…").on_hover_text("Draw with a small program (Rhai)").clicked() { self.run(Action::Script, &ctx); }
+                        if ui.button("Library…").on_hover_text("Glyph sets, shade ramps, brushes and palettes: yours and the built-in ones").clicked() {
+                            self.run(Action::Library, &ctx);
+                        }
                         if ui.button("Clear Layer").clicked() { self.clear_layer(); }
                     });
 
@@ -249,9 +254,14 @@ impl AsciiArtEditor {
                     if matches!(tool, ToolType::Shade | ToolType::Gradient) {
                         vdivider(ui);
                         ui.label("Ramp");
-                        for (i, (name, ramp)) in RAMPS.iter().enumerate() {
-                            let label = format!("{name}  {}", ramp.trim_start());
-                            ui.selectable_value(&mut self.tool_options.ramp, i, label);
+                        if let Some(ramp) = ramp_menu(ui, "tool_ramp", &self.tool_options.ramp_name, &self.settings.all_ramps()) {
+                            match ramp {
+                                Some(ramp) => {
+                                    self.tool_options.ramp = ramp.glyphs;
+                                    self.tool_options.ramp_name = ramp.name;
+                                }
+                                None => self.open_library(LibraryTab::Ramps),
+                            }
                         }
                         if tool == ToolType::Gradient {
                             ui.toggle_value(&mut self.tool_options.dither, "Dither")
@@ -342,6 +352,7 @@ impl AsciiArtEditor {
         let mut chosen: Option<BrushPreset> = None;
         let mut delete = None;
         let mut from_selection = false;
+        let mut manage = false;
         ComboBox::from_id_salt("brush_preset")
             .selected_text(&self.tool_options.brush_name)
             .width(118.0)
@@ -367,7 +378,11 @@ impl AsciiArtEditor {
                 }
                 ui.separator();
                 from_selection = ui.add(Button::new("Use Selection as Brush").shortcut_text("Ctrl+B")).clicked();
+                manage = ui.button("Manage…").clicked();
             });
+        if manage {
+            self.open_library(LibraryTab::Brushes);
+        }
         if let Some(preset) = chosen {
             self.tool_options.brush = preset.kind;
             self.tool_options.brush_name = preset.name;
@@ -527,16 +542,24 @@ impl AsciiArtEditor {
                     widgets::hline(ui);
                     ui.add_space(6.0);
                     let mut set_action = None;
+                    let mut manage_palettes = false;
                     ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.dock_tab {
                         DockTab::Glyphs => {
                             let sets = &self.settings.glyph_sets;
                             set_action = self.char_palette.show(ui, &mut self.primary_char, &mut self.secondary_char, sets);
                         }
-                        DockTab::Colors => self.color_panel.show(ui),
+                        DockTab::Colors => {
+                            if self.color_panel.show(ui, &self.settings.all_palettes()) {
+                                manage_palettes = true;
+                            }
+                        }
                         DockTab::History => self.history_panel(ui),
                     });
                     if let Some(action) = set_action {
                         self.apply_set_action(action, ui.ctx());
+                    }
+                    if manage_palettes {
+                        self.open_library(LibraryTab::Palettes);
                     }
                 });
             });
@@ -659,4 +682,23 @@ fn size_field(ui: &mut Ui, options: &mut ToolOptions) {
     if icon_button(ui, icons::PLUS, 24.0, false, "Bigger  (+)").clicked() {
         options.brush_size = (options.brush_size + 1).min(20);
     }
+}
+
+/// A drop-down of the density ramps, each drawn as it looks, with "Manage…" at the end.
+/// `Some(Some(ramp))`: a ramp was picked; `Some(None)`: manage the ramps.
+pub(super) fn ramp_menu(ui: &mut Ui, id: &str, current: &str, ramps: &[Ramp]) -> Option<Option<Ramp>> {
+    let mut picked = None;
+    ComboBox::from_id_salt(id).selected_text(current).show_ui(ui, |ui| {
+        for ramp in ramps {
+            let sample: String = ramp.glyphs.trim_start().chars().take(12).collect();
+            if ui.selectable_label(ramp.name == current, format!("{}   {sample}", ramp.name)).clicked() {
+                picked = Some(Some(ramp.clone()));
+            }
+        }
+        ui.separator();
+        if ui.selectable_label(false, "Manage…").clicked() {
+            picked = Some(None);
+        }
+    });
+    picked
 }

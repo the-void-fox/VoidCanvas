@@ -14,7 +14,7 @@ use crate::tools::{
     selection::{SelectionTool, content_to_text, text_to_content},
     text::TextTool,
     pixel::{PixelGrid, PixelTool, halves, pixel_set},
-    shade::{RAMPS, ShadeTool},
+    shade::ShadeTool,
 };
 mod animation;
 pub(crate) mod banner;
@@ -24,6 +24,7 @@ mod dialogs;
 pub(crate) mod file_dialog;
 pub(crate) mod file_io;
 mod import;
+pub(crate) mod library;
 pub(crate) mod replace;
 mod scripting;
 pub(crate) mod storage;
@@ -139,6 +140,8 @@ pub struct AsciiArtEditor {
     brush_save_name: String,
     /// A layer's blend mode and opacity before the style edit in progress.
     style_before: Option<(usize, crate::document::Blend, f32)>,
+    /// The Library window, while open.
+    pub(crate) library: Option<library::LibraryWindow>,
     /// The 3D window, while open.
     pub(crate) three_d: Option<three_d::ThreeDWindow>,
     /// The Script window, while open.
@@ -198,6 +201,7 @@ impl Default for AsciiArtEditor {
             playback:       animation::Playback::default(),
             script:         None,
             three_d:        None,
+            library:        None,
             style_before:   None,
             brush_save_name: String::new(),
             active_tab:     0,
@@ -311,8 +315,7 @@ impl AsciiArtEditor {
                         self.tools.pixel.on_press(&mut self.doc, grid.pixel_at(x, y, sub), grid, &ctx);
                     }
                     ToolType::Shade  => {
-                        let ramp = self.ramp();
-                        self.tools.shade.on_press(&mut self.doc, x, y, &ctx, ramp);
+                        self.tools.shade.on_press(&mut self.doc, x, y, &ctx, &self.tool_options.ramp);
                     }
                     ToolType::Eraser => { self.tools.eraser.on_press(&mut self.doc, x, y, &ctx); }
                     ToolType::Select => { self.tools.selection.on_press(&self.doc, x, y); }
@@ -335,8 +338,7 @@ impl AsciiArtEditor {
                         self.tools.pixel.on_drag(&mut self.doc, grid.pixel_at(x, y, sub), grid, &ctx);
                     }
                     ToolType::Shade  => {
-                        let ramp = self.ramp();
-                        self.tools.shade.on_drag(&mut self.doc, x, y, &ctx, ramp);
+                        self.tools.shade.on_drag(&mut self.doc, x, y, &ctx, &self.tool_options.ramp);
                     }
                     ToolType::Eraser => { self.tools.eraser.on_drag(&mut self.doc, x, y, &ctx); }
                     ToolType::Eyedropper => self.pick(x, y, self.last_primary),
@@ -360,7 +362,7 @@ impl AsciiArtEditor {
                     ToolType::Eraser => self.tools.eraser.on_release(),
                     ToolType::Select => self.tools.selection.on_release(&mut self.doc),
                     ToolType::Gradient => {
-                        let settings = self.gradient_settings();
+                        let settings = gradient_settings(&self.tool_options, self.tools.selection.selection, &self.doc);
                         self.tools.gradient.on_release(&mut self.doc, (x, y), &ctx, settings)
                     }
                     tool => match self.shape_for(tool) {
@@ -377,19 +379,7 @@ impl AsciiArtEditor {
         }
     }
 
-    fn ramp(&self) -> &'static str {
-        RAMPS[self.tool_options.ramp.min(RAMPS.len() - 1)].1
-    }
 
-    /// The Gradient tool covers the selection, or the whole layer.
-    fn gradient_settings(&self) -> GradientSettings {
-        let region = match self.tools.selection.selection {
-            Some((x1, y1, x2, y2)) => (x1, y1, x2 + 1, y2 + 1),
-            None => (0, 0, self.doc.width, self.doc.height),
-        };
-        let options = &self.tool_options;
-        GradientSettings { shape: options.gradient, ramp: self.ramp(), dither: options.dither, region }
-    }
 
     /// The shape a shape tool draws with the current options.
     fn shape_for(&self, tool: ToolType) -> Option<Shape> {
@@ -708,6 +698,7 @@ impl AsciiArtEditor {
                 let used: Vec<char> = (y0..y1).flat_map(|y| (x0..x1).filter_map(move |x| layer.get(x, y).map(|c| c.ch))).collect();
                 self.add_to_set(i, used.into_iter().filter(|&c| c != ' '));
             }
+            SetAction::Manage => self.open_library(library::LibraryTab::GlyphSets),
             SetAction::Copy(i) => {
                 ctx.copy_text(self.settings.glyph_sets[i].glyphs.clone());
                 self.show_status("Copied the set's glyphs");
@@ -1090,6 +1081,15 @@ impl AsciiArtEditor {
 
 }
 
+/// The Gradient tool covers the selection, or the whole layer.
+fn gradient_settings<'a>(options: &'a ToolOptions, selection: Option<(usize, usize, usize, usize)>, doc: &Document) -> GradientSettings<'a> {
+    let region = match selection {
+        Some((x1, y1, x2, y2)) => (x1, y1, x2 + 1, y2 + 1),
+        None => (0, 0, doc.width, doc.height),
+    };
+    GradientSettings { shape: options.gradient, ramp: &options.ramp, dither: options.dither, region }
+}
+
 // ── eframe::App ──────────────────────────────────────────────────────────────
 
 impl eframe::App for AsciiArtEditor {
@@ -1121,6 +1121,7 @@ impl eframe::App for AsciiArtEditor {
         self.banner_dialog(&ctx);
         self.script_window(&ctx);
         self.three_d_window(&ctx);
+        self.library_window(&ctx);
         self.file_browser_dialog(&ctx);
         self.command_palette_dialog(&ctx);
 
@@ -1143,8 +1144,8 @@ impl eframe::App for AsciiArtEditor {
                 let ctx_tool = self.draw_context(true);
                 let settings = PreviewSettings {
                     shape: self.shape_for(self.active_tool),
-                    ramp: self.ramp(),
-                    gradient: self.gradient_settings(),
+                    ramp: &self.tool_options.ramp,
+                    gradient: gradient_settings(&self.tool_options, self.tools.selection.selection, &self.doc),
                     pixel_grid: self.tool_options.pixel_grid,
                     brush: &self.tool_options.brush,
                 };

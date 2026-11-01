@@ -157,8 +157,8 @@ const ONION_NEXT: Color32 = Color32::from_rgb(120, 220, 230);
 #[derive(Clone, Copy)]
 pub struct PreviewSettings<'a> {
     pub shape: Option<Shape>,
-    pub ramp: &'static str,
-    pub gradient: GradientSettings,
+    pub ramp: &'a str,
+    pub gradient: GradientSettings<'a>,
     pub pixel_grid: PixelGrid,
     pub brush: &'a BrushKind,
 }

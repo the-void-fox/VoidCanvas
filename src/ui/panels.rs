@@ -1,5 +1,6 @@
 use egui::*;
 use crate::document::Color;
+use crate::library::Palette;
 use crate::theme;
 use crate::tools::{Channels, Mirror, border::BorderStyle, brush::BrushKind, gradient::GradientShape, pixel::PixelGrid};
 use crate::ui::widgets::{color_chip, parse_hex, section_label, to_hex};
@@ -24,41 +25,6 @@ impl ColorSlot {
     }
 }
 
-/// Named swatch sets for the Colors panel.
-pub const PALETTES: [&str; 6] = ["VGA", "xterm 256", "PICO-8", "Game Boy", "Greys", "Void"];
-
-/// The colours of palette `index` (see [`PALETTES`]).
-pub fn palette(index: usize) -> Vec<Color32> {
-    let hex = |list: &[u32]| list.iter().map(|&c| Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)).collect();
-    match index {
-        0 => hex(&[
-            0x000000, 0xAA0000, 0x00AA00, 0xAA5500, 0x0000AA, 0xAA00AA, 0x00AAAA, 0xAAAAAA,
-            0x555555, 0xFF5555, 0x55FF55, 0xFFFF55, 0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF,
-        ]),
-        1 => {
-            // xterm: 16 system colours, a 6×6×6 cube and 24 greys.
-            let mut colors: Vec<Color32> = hex(&[
-                0x000000, 0x800000, 0x008000, 0x808000, 0x000080, 0x800080, 0x008080, 0xC0C0C0,
-                0x808080, 0xFF0000, 0x00FF00, 0xFFFF00, 0x0000FF, 0xFF00FF, 0x00FFFF, 0xFFFFFF,
-            ]);
-            const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
-            for r in LEVELS { for g in LEVELS { for b in LEVELS { colors.push(Color32::from_rgb(r, g, b)); } } }
-            colors.extend((0..24).map(|i| Color32::from_gray(8 + 10 * i)));
-            colors
-        }
-        2 => hex(&[
-            0x000000, 0x1D2B53, 0x7E2553, 0x008751, 0xAB5236, 0x5F574F, 0xC2C3C7, 0xFFF1E8,
-            0xFF004D, 0xFFA300, 0xFFEC27, 0x00E436, 0x29ADFF, 0x83769C, 0xFF77A8, 0xFFCCAA,
-        ]),
-        3 => hex(&[0x0F380F, 0x306230, 0x8BAC0F, 0x9BBC0F]),
-        4 => (0..16).map(|i| Color32::from_gray(i * 17)).collect(),
-        _ => hex(&[
-            0x0B0B0F, 0x121218, 0x26263A, 0x3A2668, 0x7C4DFF, 0xA78BFA, 0xC4B5FD, 0xE4E4EE,
-            0x78DCE6, 0xF5E6A8, 0xFBBF24, 0xF87171,
-        ]),
-    }
-}
-
 pub struct ColorPanel {
     pub primary_fg:   Color,
     pub primary_bg:   Color,
@@ -67,7 +33,7 @@ pub struct ColorPanel {
     /// The slot the picker and the palette edit.
     pub slot: ColorSlot,
     hex: String,
-    /// Index into [`PALETTES`].
+    /// Index into all palettes (`Settings::all_palettes`).
     pub palette: usize,
     /// Recently used colours, newest first.
     pub recent: Vec<Color>,
@@ -119,7 +85,9 @@ impl ColorPanel {
         std::mem::swap(&mut self.primary_bg, &mut self.secondary_bg);
     }
 
-    pub fn show(&mut self, ui: &mut Ui) {
+    /// Returns whether the user asked to manage palettes.
+    pub fn show(&mut self, ui: &mut Ui, palettes: &[Palette]) -> bool {
+        let mut manage = false;
         section_label(ui, "Slots");
         Grid::new("color_slots").num_columns(3).spacing([10.0, 8.0]).show(ui, |ui| {
             ui.label("");
@@ -184,19 +152,23 @@ impl ColorPanel {
         }
 
         ui.add_space(6.0);
+        self.palette = self.palette.min(palettes.len().saturating_sub(1));
         ui.horizontal(|ui| {
             section_label(ui, "Palette");
             ComboBox::from_id_salt("palette")
-                .selected_text(PALETTES[self.palette])
+                .selected_text(palettes.get(self.palette).map_or("", |p| p.name.as_str()))
                 .show_ui(ui, |ui| {
-                    for (i, name) in PALETTES.iter().enumerate() {
-                        ui.selectable_value(&mut self.palette, i, *name);
+                    for (i, p) in palettes.iter().enumerate() {
+                        ui.selectable_value(&mut self.palette, i, &p.name);
                     }
+                    ui.separator();
+                    manage = ui.selectable_label(false, "Manage…").clicked();
                 });
         });
-        let colors = palette(self.palette);
+        let colors: Vec<Color32> = palettes.get(self.palette).map_or(Vec::new(), |p| p.colors.iter().map(Color::to_egui).collect());
         let size = if colors.len() > 32 { 15.0 } else { 22.0 };
         self.swatches(ui, &colors, size);
+        manage
     }
 
     /// Clickable colour chips in rows; a click puts the colour into the selected slot.
@@ -226,8 +198,9 @@ pub struct ToolOptions {
     pub border_style:  BorderStyle,
     /// The Line tool draws box-drawing lines (in `border_style`) instead of the glyph.
     pub line_box:      bool,
-    /// Index into `shade::RAMPS` (Shade and Gradient).
-    pub ramp:          usize,
+    /// The density ramp of Shade and Gradient (glyphs, and its name in the library).
+    pub ramp:          String,
+    pub ramp_name:     String,
     pub gradient:      GradientShape,
     /// How finely the Pixel tool splits a cell.
     pub pixel_grid:    PixelGrid,
@@ -246,7 +219,8 @@ impl Default for ToolOptions {
             filled:       false,
             border_style: BorderStyle::Single,
             line_box:     false,
-            ramp:         0,
+            ramp:         " ░▒▓█".into(),
+            ramp_name:    "Blocks".into(),
             gradient:     GradientShape::Linear,
             pixel_grid:   PixelGrid::Halves,
             dither:       true,
