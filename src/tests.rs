@@ -748,7 +748,9 @@ mod ui {
         let app = harness.state();
         assert!(app.file_browser.is_none());
         assert!(path.is_file());
-        assert_eq!(app.doc.file_path.as_deref(), Some(path.to_str().unwrap()));
+        // Compared as resolved paths: Windows may name the temp folder in its short 8.3 form.
+        let saved = std::fs::canonicalize(app.doc.file_path.as_deref().unwrap()).unwrap();
+        assert_eq!(saved, std::fs::canonicalize(&path).unwrap());
         assert!(!app.doc.modified);
 
         // From now on Ctrl+S writes straight to the file.
