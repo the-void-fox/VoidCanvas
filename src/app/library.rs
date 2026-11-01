@@ -215,7 +215,7 @@ impl AsciiArtEditor {
                 ui.separator();
                 // A fixed height: the divider between list and editor would otherwise grow the
                 // window to the bottom of the screen.
-                let body = vec2(ui.available_width().max(560.0), 360.0);
+                let body = vec2(620.0, 360.0);
                 ui.allocate_ui_with_layout(body, Layout::left_to_right(Align::Min), |ui| {
                     ui.set_min_size(body);
                     ui.vertical(|ui| {
@@ -246,7 +246,12 @@ impl AsciiArtEditor {
                         });
                     });
                     ui.separator();
+                    // A set width: wrapping rows (256 xterm colours, long glyph sets) wrap at it
+                    // instead of stretching the window.
+                    let editor = (body.x - 210.0).max(330.0);
                     ui.vertical(|ui| {
+                        ui.set_width(editor);
+                        ui.set_max_width(editor);
                         self.library_editor(ui, tab, selected, own);
                     });
                 });
@@ -402,22 +407,25 @@ impl AsciiArtEditor {
                 let (mut name, mut colors) = (palette.name.clone(), palette.colors.clone());
                 let mut changed = name_field(ui, &mut name, read_only);
                 ScrollArea::vertical().id_salt("library_swatches").max_height(200.0).show(ui, |ui| {
+                    // Plain buttons straight in the wrapping row (a scope per swatch wouldn't wrap).
+                    if read_only {
+                        ui.disable();
+                    }
                     ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
                         let mut remove = None;
                         for (i, color) in colors.iter_mut().enumerate() {
                             let mut c = color.to_egui();
-                            ui.add_enabled_ui(!read_only, |ui| {
-                                let resp = color_picker::color_edit_button_srgba(ui, &mut c, color_picker::Alpha::OnlyBlend);
-                                if resp.changed() {
-                                    *color = Color::from_egui(c);
-                                    changed = true;
+                            let resp = color_picker::color_edit_button_srgba(ui, &mut c, color_picker::Alpha::OnlyBlend);
+                            if resp.changed() {
+                                *color = Color::from_egui(c);
+                                changed = true;
+                            }
+                            resp.context_menu(|ui| {
+                                if ui.button("Remove").clicked() {
+                                    remove = Some(i);
+                                    ui.close();
                                 }
-                                resp.context_menu(|ui| {
-                                    if ui.button("Remove").clicked() {
-                                        remove = Some(i);
-                                        ui.close();
-                                    }
-                                });
                             });
                         }
                         if let Some(i) = remove {
