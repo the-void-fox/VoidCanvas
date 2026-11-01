@@ -53,6 +53,9 @@ pub struct Settings {
     /// The user's own glyph sets.
     #[serde(default)]
     pub glyph_sets: Vec<GlyphSet>,
+    /// Brushes the user saved.
+    #[serde(default)]
+    pub brushes: Vec<crate::tools::brush::BrushPreset>,
 }
 
 /// A named set of glyphs made by the user, shown in the Glyphs panel after the built-in ones.
@@ -109,6 +112,12 @@ impl Settings {
     /// Changes the user's glyph sets and keeps them.
     pub fn edit_glyph_sets(&mut self, change: impl FnOnce(&mut Vec<GlyphSet>)) {
         change(&mut self.glyph_sets);
+        self.save();
+    }
+
+    /// Changes the user's brushes and keeps them.
+    pub fn edit_brushes(&mut self, change: impl FnOnce(&mut Vec<crate::tools::brush::BrushPreset>)) {
+        change(&mut self.brushes);
         self.save();
     }
 

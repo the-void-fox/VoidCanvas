@@ -42,6 +42,8 @@ pub enum Action {
     Replace,
     InsertBanner,
     Script,
+    BrushFromSelection,
+    UseBrush(crate::tools::brush::BrushPreset),
     ClearLayer,
     Resize,
     ZoomIn,
@@ -139,6 +141,13 @@ impl AsciiArtEditor {
         add("Edit", "Replace…", "Ctrl+H", Action::Replace);
         add("Edit", "Insert Banner…", "", Action::InsertBanner);
         add("Edit", "Script…", "", Action::Script);
+        if has_selection {
+            add("Brush", "Use Selection as Brush", "Ctrl+B", Action::BrushFromSelection);
+        }
+        for preset in crate::tools::brush::builtin_presets().into_iter().chain(self.settings.brushes.iter().cloned()) {
+            let name = preset.name.clone();
+            add("Brush", &name, "", Action::UseBrush(preset));
+        }
         add("Edit", "Clear Layer", "", Action::ClearLayer);
 
         add("Canvas", "Resize…", "", Action::Resize);
@@ -236,6 +245,12 @@ impl AsciiArtEditor {
             Action::Replace => self.open_replace(),
             Action::InsertBanner => self.open_banner(),
             Action::Script => self.open_script(),
+            Action::BrushFromSelection => self.brush_from_selection(),
+            Action::UseBrush(preset) => {
+                self.tool_options.brush = preset.kind;
+                self.tool_options.brush_name = preset.name;
+                self.active_tool = ToolType::Brush;
+            }
             Action::ClearLayer => self.clear_layer(),
             Action::Resize => {
                 self.new_width  = self.doc.width;

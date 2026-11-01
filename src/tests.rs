@@ -491,6 +491,21 @@ mod ui {
     }
 
     #[test]
+    fn ctrl_b_makes_the_selection_the_brush() {
+        let mut harness = harness();
+        set_row(&mut harness, 0, 0, "<>");
+        harness.state_mut().tools.selection.selection = Some((0, 0, 1, 0));
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::B);
+        harness.step();
+        let app = harness.state();
+        assert_eq!(app.active_tool, ToolType::Brush);
+        assert_eq!(app.tool_options.brush_name, "Stamp 2×1");
+        assert!(matches!(&app.tool_options.brush, crate::tools::brush::BrushKind::Stamp { cells, .. } if cells[0][1].ch == '>'));
+        let entries = app.actions();
+        assert!(entries.iter().any(|e| e.group == "Brush" && e.name == "Stars"), "presets are in the palette");
+    }
+
+    #[test]
     fn select_all_and_bracket_keys() {
         let mut harness = harness();
         harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
@@ -1795,6 +1810,82 @@ mod blending {
         assert_eq!((doc.layers[1].blend, doc.layers[1].opacity), (Blend::Overlay, 0.4));
         history.undo(&mut doc);
         assert_eq!((doc.layers[1].blend, doc.layers[1].opacity), (Blend::Normal, 1.0));
+    }
+}
+
+mod brushes {
+    use super::{NONE, ctx, glyph, red};
+    use crate::document::{Cell, Document};
+    use crate::tools::brush::{BrushKind, BrushTool, direction};
+
+    fn row(doc: &Document, y: usize) -> String {
+        (0..doc.width).map(|x| doc.layers[0].get(x, y).unwrap().ch).collect()
+    }
+
+    #[test]
+    fn directions_follow_the_stroke_as_it_looks() {
+        // Cells are twice as tall as wide: two across and one down is a 45° diagonal.
+        for (way, want) in [((1, 0), 0), ((-3, 0), 0), ((0, 1), 1), ((1, -3), 1), ((2, -1), 2), ((-2, 1), 2), ((2, 1), 3), ((-2, -1), 3), ((5, 1), 0)] {
+            assert_eq!(direction(way), want, "{way:?}");
+        }
+    }
+
+    #[test]
+    fn scatter_is_stable_within_a_stroke_and_previews_truly() {
+        let mut doc = Document::new(12, 6);
+        let brush = BrushKind::Scatter { glyphs: "*+".into(), density: 0.5 };
+        let mut c = ctx('#', red(), NONE);
+        c.brush_size = 5;
+        let mut tool = BrushTool::default();
+        let preview = tool.preview(&doc, 5, 3, &brush, &c);
+        tool.on_press(&mut doc, 5, 3, &brush, &c);
+        let first = (0..6).map(|y| row(&doc, y)).collect::<Vec<_>>();
+        assert!(preview.iter().all(|(x, y, cell)| doc.layers[0].get(*x, *y) == Some(cell)), "the preview showed this stroke");
+        tool.on_drag(&mut doc, 6, 3, &brush, &c);
+        tool.on_drag(&mut doc, 5, 3, &brush, &c);
+        let changes = tool.on_release();
+        assert_eq!((0..6).map(|y| row(&doc, y)).collect::<Vec<_>>()[1..5].iter().map(|r| &r[3..8]).collect::<Vec<_>>(),
+                   first[1..5].iter().map(|r| &r[3..8]).collect::<Vec<_>>(), "going back over a cell doesn't redraw it");
+        let placed = changes.len();
+        assert!(placed > 3 && placed < 30, "about half of the cells: {placed}");
+        // Full density covers the square.
+        let mut full = Document::new(5, 5);
+        let mut tool = BrushTool::default();
+        tool.on_press(&mut full, 2, 2, &BrushKind::Scatter { glyphs: "o".into(), density: 1.0 }, &{ let mut c = c.clone(); c.brush_size = 3; c });
+        assert_eq!((0..5).map(|y| row(&full, y)).collect::<String>(), "      ooo  ooo  ooo      ");
+    }
+
+    #[test]
+    fn direction_brush_draws_the_line_it_follows() {
+        let mut doc = Document::new(8, 6);
+        let brush = BrushKind::Direction { glyphs: "-|/\\".into() };
+        let c = ctx('#', red(), NONE);
+        let mut tool = BrushTool::default();
+        tool.on_press(&mut doc, 1, 1, &brush, &c);
+        tool.on_drag(&mut doc, 4, 1, &brush, &c);
+        tool.on_drag(&mut doc, 4, 4, &brush, &c);
+        tool.on_release();
+        assert_eq!(row(&doc, 1), " ----   ");
+        assert_eq!((2..5).map(|y| doc.layers[0].get(4, y).unwrap().ch).collect::<String>(), "|||");
+    }
+
+    #[test]
+    fn stamps_go_down_centred_without_their_empty_cells() {
+        let mut doc = Document::new(7, 5);
+        doc.layers[0].set(3, 2, glyph('.'));
+        let block = vec![vec![Cell::new('A', red(), NONE), Cell::empty()], vec![Cell::new('B', red(), NONE), Cell::new('C', red(), NONE)]];
+        let mut tool = BrushTool::default();
+        let c = ctx('#', crate::document::Color::WHITE, NONE);
+        tool.on_press(&mut doc, 3, 2, &BrushKind::Stamp { cells: block.clone(), recolor: false }, &c);
+        tool.on_release();
+        assert_eq!(row(&doc, 1), "  A    ");
+        assert_eq!(row(&doc, 2), "  BC   ", "the stamp's cells replace what was under them");
+        assert_eq!(doc.layers[0].get(2, 1).unwrap().fg, red(), "own colours");
+        let mut doc = Document::new(7, 5);
+        tool.on_press(&mut doc, 3, 2, &BrushKind::Stamp { cells: block, recolor: true }, &c);
+        tool.on_release();
+        assert_eq!(doc.layers[0].get(2, 1).unwrap().fg, crate::document::Color::WHITE, "slot colours");
+        assert_eq!(doc.layers[0].get(3, 1).unwrap().ch, ' ', "empty stamp cells leave the canvas alone");
     }
 }
 

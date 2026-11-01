@@ -6,7 +6,8 @@ use super::{AsciiArtEditor, DockTab, commands::Action, file_dialog::FileAction};
 use crate::glyphs::Transform;
 use crate::icons;
 use crate::theme;
-use crate::tools::{ToolType, border::BorderStyle, gradient::GradientShape, pixel::PixelGrid, shade::RAMPS};
+use crate::tools::{ToolType, border::BorderStyle, brush::{BrushKind, BrushPreset, builtin_presets}, gradient::GradientShape, pixel::PixelGrid, shade::RAMPS};
+use crate::ui::panels::ToolOptions;
 use crate::ui::widgets::{self, color_chip, icon_button, icon_toggle, tab_bar, to_hex, vdivider};
 
 /// Selection transforms with their menu label and shortcut.
@@ -180,18 +181,13 @@ impl AsciiArtEditor {
                     let hint = |ui: &mut Ui, text: &str| {
                         ui.label(RichText::new(text).color(theme::TEXT_FAINT));
                     };
+                    if tool == ToolType::Brush {
+                        self.brush_options(ui);
+                    }
                     let options = &mut self.tool_options;
                     match tool {
-                        ToolType::Brush | ToolType::Eraser | ToolType::Pixel | ToolType::Shade => {
-                            ui.label("Size");
-                            if icon_button(ui, icons::MINUS, 24.0, false, "Smaller  (-)").clicked() {
-                                options.brush_size = options.brush_size.saturating_sub(1).max(1);
-                            }
-                            ui.add(DragValue::new(&mut options.brush_size).range(1..=20).speed(0.1));
-                            if icon_button(ui, icons::PLUS, 24.0, false, "Bigger  (+)").clicked() {
-                                options.brush_size = (options.brush_size + 1).min(20);
-                            }
-                        }
+                        ToolType::Brush => {}
+                        ToolType::Eraser | ToolType::Pixel | ToolType::Shade => size_field(ui, options),
                         ToolType::Rectangle | ToolType::Ellipse => {
                             ui.toggle_value(&mut options.filled, "Filled");
                         }
@@ -320,6 +316,9 @@ impl AsciiArtEditor {
                         } else {
                             "One colour per cell · right button: clear a pixel · Alt+click: pick"
                         });
+                    } else if tool == ToolType::Brush && matches!(self.tool_options.brush, BrushKind::Direction { .. }) {
+                        vdivider(ui);
+                        hint(ui, "Each cell gets the glyph for the way the stroke goes · right button: secondary slot");
                     } else if matches!(tool, ToolType::Brush | ToolType::Eraser | ToolType::Fill) {
                         vdivider(ui);
                         hint(ui, "Right button: secondary slot · Alt+click: pick");
@@ -336,6 +335,95 @@ impl AsciiArtEditor {
                     });
                 });
             });
+    }
+
+    /// The Brush's presets and the settings of the kind of brush it is.
+    fn brush_options(&mut self, ui: &mut Ui) {
+        let mut chosen: Option<BrushPreset> = None;
+        let mut delete = None;
+        let mut from_selection = false;
+        ComboBox::from_id_salt("brush_preset")
+            .selected_text(&self.tool_options.brush_name)
+            .width(118.0)
+            .show_ui(ui, |ui| {
+                let current = &self.tool_options.brush_name;
+                for preset in builtin_presets() {
+                    if ui.selectable_label(*current == preset.name, &preset.name).clicked() {
+                        chosen = Some(preset);
+                    }
+                }
+                if !self.settings.brushes.is_empty() {
+                    ui.separator();
+                }
+                for (i, preset) in self.settings.brushes.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(*current == preset.name, &preset.name).clicked() {
+                            chosen = Some(preset.clone());
+                        }
+                        if ui.small_button(icons::CLOSE).on_hover_text("Delete this brush").clicked() {
+                            delete = Some(i);
+                        }
+                    });
+                }
+                ui.separator();
+                from_selection = ui.add(Button::new("Use Selection as Brush").shortcut_text("Ctrl+B")).clicked();
+            });
+        if let Some(preset) = chosen {
+            self.tool_options.brush = preset.kind;
+            self.tool_options.brush_name = preset.name;
+        }
+        if let Some(i) = delete {
+            self.settings.edit_brushes(|brushes| { brushes.remove(i); });
+        }
+        if from_selection {
+            self.brush_from_selection();
+        }
+
+        let options = &mut self.tool_options;
+        match &mut options.brush {
+            BrushKind::Square => size_field(ui, options),
+            BrushKind::Scatter { glyphs, density } => {
+                ui.add(TextEdit::singleline(glyphs).desired_width(70.0).font(TextStyle::Monospace))
+                    .on_hover_text("Glyphs to scatter, picked at random");
+                let mut percent = *density * 100.0;
+                ui.spacing_mut().slider_width = 70.0;
+                if ui.add(Slider::new(&mut percent, 1.0..=100.0).suffix("%").fixed_decimals(0)).on_hover_text("How many cells get a glyph").changed() {
+                    *density = percent / 100.0;
+                }
+                size_field(ui, options);
+            }
+            BrushKind::Direction { glyphs } => {
+                ui.add(TextEdit::singleline(glyphs).char_limit(4).desired_width(48.0).font(TextStyle::Monospace))
+                    .on_hover_text("Glyphs for lines going across, down, up-right and down-right");
+            }
+            BrushKind::Stamp { cells, recolor } => {
+                let size = format!("{}×{}", cells.first().map_or(0, Vec::len), cells.len());
+                ui.label(RichText::new(size).font(theme::mono(12.5)).color(theme::TEXT_DIM));
+                ui.toggle_value(recolor, "Slot Colours").on_hover_text("Paint the stamp in the slot's colours instead of its own");
+            }
+        }
+
+        ui.menu_button(format!("{}  Save", icons::PLUS), |ui| {
+            if self.brush_save_name.is_empty() {
+                self.brush_save_name = self.tool_options.brush_name.clone();
+            }
+            ui.label("Keep this brush as");
+            let field = ui.add(TextEdit::singleline(&mut self.brush_save_name).desired_width(160.0));
+            let save = ui.button("Save Brush").clicked() || (field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)));
+            let name = self.brush_save_name.trim().to_owned();
+            if save && !name.is_empty() {
+                let preset = BrushPreset { name: name.clone(), kind: self.tool_options.brush.clone() };
+                self.settings.edit_brushes(|brushes| match brushes.iter_mut().find(|b| b.name == name) {
+                    Some(same) => *same = preset,
+                    None => brushes.push(preset),
+                });
+                self.tool_options.brush_name = name;
+                self.brush_save_name.clear();
+                self.show_status("Brush saved");
+                ui.close();
+            }
+        });
+        vdivider(ui);
     }
 
     pub(super) fn tool_strip(&mut self, ui: &mut Ui) {
@@ -549,5 +637,17 @@ impl AsciiArtEditor {
                     });
                 });
             });
+    }
+}
+
+/// Brush size: − / value / +.
+fn size_field(ui: &mut Ui, options: &mut ToolOptions) {
+    ui.label("Size");
+    if icon_button(ui, icons::MINUS, 24.0, false, "Smaller  (-)").clicked() {
+        options.brush_size = options.brush_size.saturating_sub(1).max(1);
+    }
+    ui.add(DragValue::new(&mut options.brush_size).range(1..=20).speed(0.1));
+    if icon_button(ui, icons::PLUS, 24.0, false, "Bigger  (+)").clicked() {
+        options.brush_size = (options.brush_size + 1).min(20);
     }
 }

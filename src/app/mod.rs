@@ -134,6 +134,8 @@ pub struct AsciiArtEditor {
     /// One entry per tab; the one in front is `None`, its document lives in the fields above.
     tabs: Vec<Option<tabs::Tab>>,
     pub(crate) playback: animation::Playback,
+    /// The name typed to save the current brush as.
+    brush_save_name: String,
     /// A layer's blend mode and opacity before the style edit in progress.
     style_before: Option<(usize, crate::document::Blend, f32)>,
     /// The Script window, while open.
@@ -193,6 +195,7 @@ impl Default for AsciiArtEditor {
             playback:       animation::Playback::default(),
             script:         None,
             style_before:   None,
+            brush_save_name: String::new(),
             active_tab:     0,
             last_dir:       None,
             system_dialog_failed: cfg!(test),
@@ -290,7 +293,7 @@ impl AsciiArtEditor {
                 self.stroke_changes.clear();
 
                 match tool {
-                    ToolType::Brush  => { self.tools.brush.on_press(&mut self.doc, x, y, &ctx); }
+                    ToolType::Brush  => self.tools.brush.on_press(&mut self.doc, x, y, &self.tool_options.brush, &ctx),
                     ToolType::Pixel  => {
                         let grid = self.tool_options.pixel_grid;
                         self.tools.pixel.on_press(&mut self.doc, grid.pixel_at(x, y, sub), grid, &ctx);
@@ -311,7 +314,7 @@ impl AsciiArtEditor {
                 if !self.drawing { return; }
                 let ctx = self.draw_context(self.last_primary);
                 match self.stroke_tool {
-                    ToolType::Brush  => { self.tools.brush.on_drag(&mut self.doc, x, y, &ctx); }
+                    ToolType::Brush  => self.tools.brush.on_drag(&mut self.doc, x, y, &self.tool_options.brush, &ctx),
                     ToolType::Pixel  => {
                         let grid = self.tool_options.pixel_grid;
                         self.tools.pixel.on_drag(&mut self.doc, grid.pixel_at(x, y, sub), grid, &ctx);
@@ -528,12 +531,14 @@ impl AsciiArtEditor {
         let cmd = Modifiers::COMMAND;
         let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         // Most specific shortcuts first: consume_key ignores extra Shift.
-        let (palette, select_all, deselect_all, replace) = ctx.input_mut(|i| (
+        let (palette, select_all, deselect_all, replace, brush) = ctx.input_mut(|i| (
             i.consume_key(cmd_shift, Key::P) || i.consume_key(Modifiers::NONE, Key::F1),
             i.consume_key(cmd, Key::A),
             i.consume_key(cmd, Key::D),
             i.consume_key(cmd, Key::H),
+            i.consume_key(cmd, Key::B),
         ));
+        if brush { self.run(Action::BrushFromSelection, ctx); }
         let (close_tab, prev_tab, next_tab) = ctx.input_mut(|i| (
             i.consume_key(cmd, Key::W),
             i.consume_key(cmd_shift, Key::Tab),
@@ -626,6 +631,23 @@ impl AsciiArtEditor {
         if prev_frame { self.run(Action::PrevFrame, ctx); }
         if next_frame { self.run(Action::NextFrame, ctx); }
         if play { self.run(Action::Play, ctx); }
+    }
+
+    /// Ctrl+B: the selected part of the active layer becomes the Brush.
+    pub(crate) fn brush_from_selection(&mut self) {
+        let Some(cells) = self.tools.selection.copy(&self.doc) else {
+            self.show_status("Select something to make a brush of");
+            return;
+        };
+        if cells.iter().flatten().all(Cell::is_empty) {
+            self.show_status("The selection is empty on this layer");
+            return;
+        }
+        let size = format!("{}×{}", cells[0].len(), cells.len());
+        self.tool_options.brush = crate::tools::brush::BrushKind::Stamp { cells, recolor: false };
+        self.tool_options.brush_name = format!("Stamp {size}");
+        self.active_tool = ToolType::Brush;
+        self.show_status(format!("The {size} selection is the brush now"));
     }
 
     // ── The user's glyph sets ────────────────────────────────────────────────
@@ -1061,6 +1083,7 @@ impl eframe::App for AsciiArtEditor {
                     ramp: self.ramp(),
                     gradient: self.gradient_settings(),
                     pixel_grid: self.tool_options.pixel_grid,
+                    brush: &self.tool_options.brush,
                 };
                 // Space + drag pans, like in Photoshop.
                 let pan_mode = !self.drawing

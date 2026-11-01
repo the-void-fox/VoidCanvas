@@ -1,7 +1,7 @@
 use egui::*;
 use crate::document::Color;
 use crate::theme;
-use crate::tools::{Channels, Mirror, border::BorderStyle, gradient::GradientShape, pixel::PixelGrid};
+use crate::tools::{Channels, Mirror, border::BorderStyle, brush::BrushKind, gradient::GradientShape, pixel::PixelGrid};
 use crate::ui::widgets::{color_chip, parse_hex, section_label, to_hex};
 
 /// One of the four colour slots.
@@ -219,6 +219,9 @@ impl ColorPanel {
 /// Settings of the drawing tools, edited in the options bar.
 pub struct ToolOptions {
     pub brush_size:    usize,
+    /// What the Brush paints, and the name of the preset it came from.
+    pub brush:         BrushKind,
+    pub brush_name:    String,
     pub filled:        bool,
     pub border_style:  BorderStyle,
     /// The Line tool draws box-drawing lines (in `border_style`) instead of the glyph.
@@ -238,6 +241,8 @@ impl Default for ToolOptions {
     fn default() -> Self {
         Self {
             brush_size:   1,
+            brush:        BrushKind::Square,
+            brush_name:   "Square".into(),
             filled:       false,
             border_style: BorderStyle::Single,
             line_box:     false,

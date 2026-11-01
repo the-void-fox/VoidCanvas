@@ -122,6 +122,17 @@ impl Default for Channels {
     }
 }
 
+impl Channels {
+    /// `old` with the enabled parts taken from `new`.
+    pub fn take(&self, old: &Cell, new: &Cell) -> Cell {
+        Cell {
+            ch: if self.glyph { new.ch } else { old.ch },
+            fg: if self.fg { new.fg.clone() } else { old.fg.clone() },
+            bg: if self.bg { new.bg.clone() } else { old.bg.clone() },
+        }
+    }
+}
+
 /// Symmetry axes through the middle of the canvas.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Mirror {
@@ -140,6 +151,22 @@ impl Mirror {
         if self.y { points.push((x, my)); }
         if self.x && self.y { points.push((mx, my)); }
         points
+    }
+
+    /// Like [`Self::stamps`], for whole cells.
+    pub fn cells(&self, cells: Vec<(usize, usize, Cell)>, w: usize, h: usize) -> Vec<(usize, usize, Cell)> {
+        let glyphs = cells.iter().map(|(x, y, c)| (*x, *y, c.ch)).collect();
+        if !self.x && !self.y {
+            return cells.into_iter().filter(|(x, y, _)| *x < w && *y < h).collect();
+        }
+        // Each cell has 1, 2 or 4 images, in the order `stamps` makes them.
+        let per = 1 + self.x as usize + self.y as usize + (self.x && self.y) as usize;
+        let inside: Vec<Cell> = cells.into_iter().filter(|(x, y, _)| *x < w && *y < h).map(|(_, _, c)| c).collect();
+        self.stamps(glyphs, w, h)
+            .into_iter()
+            .enumerate()
+            .map(|(i, (x, y, ch))| (x, y, Cell { ch, ..inside[i / per].clone() }))
+            .collect()
     }
 
     /// The stamps and their mirror images, with glyphs turned to match (`/` ↔ `\\`, `┌` ↔ `┐`, …).

@@ -3,6 +3,7 @@ use crate::document::{Document, Stack};
 use crate::theme;
 use crate::tools::*;
 use crate::tools::gradient::GradientSettings;
+use crate::tools::brush::BrushKind;
 use crate::tools::pixel::PixelGrid;
 use crate::tools::shapes::{Shape, ShapeMods};
 use crate::ui::glyph_render;
@@ -154,11 +155,12 @@ pub enum CanvasEvent {
 const ONION_NEXT: Color32 = Color32::from_rgb(120, 220, 230);
 
 #[derive(Clone, Copy)]
-pub struct PreviewSettings {
+pub struct PreviewSettings<'a> {
     pub shape: Option<Shape>,
     pub ramp: &'static str,
     pub gradient: GradientSettings,
     pub pixel_grid: PixelGrid,
+    pub brush: &'a BrushKind,
 }
 
 /// Shift constrains a shape, Alt draws it from the centre.
@@ -440,7 +442,7 @@ fn get_preview(
     mods: Modifiers,
 ) -> Vec<(usize, usize, crate::document::Cell)> {
     match (tool, settings.shape) {
-        (ToolType::Brush, _) => tools.brush.preview(doc, x, y, ctx),
+        (ToolType::Brush, _) => tools.brush.preview(doc, x, y, settings.brush, ctx),
         (ToolType::Pixel, _) => tools.pixel.preview(doc, settings.pixel_grid.pixel_at(x, y, sub), settings.pixel_grid, ctx),
         (ToolType::Shade, _) => tools.shade.preview(doc, x, y, ctx, settings.ramp),
         (ToolType::Gradient, _) => tools.gradient.preview(doc, (x, y), ctx, settings.gradient),
