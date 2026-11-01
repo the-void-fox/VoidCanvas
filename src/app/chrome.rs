@@ -6,7 +6,7 @@ use super::{AsciiArtEditor, DockTab, commands::Action, file_dialog::FileAction};
 use crate::glyphs::Transform;
 use crate::icons;
 use crate::theme;
-use crate::tools::{ToolType, border::BorderStyle, gradient::GradientShape, shade::RAMPS};
+use crate::tools::{ToolType, border::BorderStyle, gradient::GradientShape, pixel::PixelGrid, shade::RAMPS};
 use crate::ui::widgets::{self, color_chip, icon_button, icon_toggle, tab_bar, to_hex, vdivider};
 
 /// Selection transforms with their menu label and shortcut.
@@ -243,6 +243,13 @@ impl AsciiArtEditor {
                             }
                         }
                     }
+                    if tool == ToolType::Pixel {
+                        vdivider(ui);
+                        ui.label("Grid");
+                        for grid in PixelGrid::ALL {
+                            ui.selectable_value(&mut self.tool_options.pixel_grid, grid, grid.name());
+                        }
+                    }
                     if matches!(tool, ToolType::Shade | ToolType::Gradient) {
                         vdivider(ui);
                         ui.label("Ramp");
@@ -308,7 +315,11 @@ impl AsciiArtEditor {
                         hint(ui, "Drag across the selection or the layer · right button: reversed");
                     } else if tool == ToolType::Pixel {
                         vdivider(ui);
-                        hint(ui, "Square pixels from half blocks · right button: secondary colour · Alt+click: pick");
+                        hint(ui, if self.tool_options.pixel_grid == PixelGrid::Halves {
+                            "Two colours per cell · right button: secondary colour · Alt+click: pick"
+                        } else {
+                            "One colour per cell · right button: clear a pixel · Alt+click: pick"
+                        });
                     } else if matches!(tool, ToolType::Brush | ToolType::Eraser | ToolType::Fill) {
                         vdivider(ui);
                         hint(ui, "Right button: secondary slot · Alt+click: pick");

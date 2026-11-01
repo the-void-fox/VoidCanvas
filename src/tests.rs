@@ -1000,6 +1000,39 @@ mod stage3 {
     }
 
     #[test]
+    fn finer_pixel_grids_build_their_glyphs() {
+        use crate::tools::pixel::{PixelGrid, PixelTool};
+        let paint = |grid: PixelGrid, dots: &[(usize, usize)], erase: &[(usize, usize)]| {
+            let mut doc = Document::new(2, 1);
+            doc.layers[0].set(0, 0, super::glyph('#'));
+            let mut tool = PixelTool::default();
+            let mut c = ctx('#', red(), NONE);
+            for &p in dots {
+                tool.on_press(&mut doc, p, grid, &c);
+                tool.on_release();
+            }
+            c.is_primary = false;
+            for &p in erase {
+                tool.on_press(&mut doc, p, grid, &c);
+                tool.on_release();
+            }
+            doc.layers[0].get(0, 0).unwrap().clone()
+        };
+        // Braille: column 0 holds dots 1, 2, 3, 7 from the top.
+        let cell = paint(PixelGrid::Braille, &[(0, 0), (1, 3)], &[]);
+        assert_eq!((cell.ch, cell.fg.clone()), ('⢁', red()), "a foreign glyph gives way");
+        assert_eq!(paint(PixelGrid::Braille, &[(0, 0), (1, 3)], &[(1, 3)]).ch, '⠁', "the right button clears a dot");
+        assert_eq!(paint(PixelGrid::Quarters, &[(0, 0), (1, 1)], &[]).ch, '▚');
+        assert_eq!(paint(PixelGrid::Quarters, &[(0, 0), (0, 1)], &[]).ch, '▌');
+        assert_eq!(paint(PixelGrid::Sixths, &[(0, 0), (0, 1), (0, 2)], &[]).ch, '▌', "the left column is the half block");
+        assert_eq!(paint(PixelGrid::Sixths, &[(1, 2)], &[]).ch, '🬞');
+        assert_eq!(paint(PixelGrid::Sixths, &[(0, 0)], &[(0, 0)]).ch, ' ');
+        // The pixel under the pointer.
+        assert_eq!(PixelGrid::Braille.pixel_at(3, 2, (0.9, 0.3)), (7, 9));
+        assert_eq!(PixelGrid::Halves.pixel_at(3, 2, (0.9, 0.99)), (3, 5));
+    }
+
+    #[test]
     fn mirrored_brush_turns_glyphs() {
         let mut doc = Document::new(10, 4);
         let mut c = ctx('/', red(), NONE);

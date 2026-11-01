@@ -13,7 +13,7 @@ use crate::tools::{
     shapes::{Shape, ShapeTool},
     selection::{SelectionTool, content_to_text, text_to_content},
     text::TextTool,
-    pixel::{PixelTool, halves},
+    pixel::{PixelGrid, PixelTool, halves, pixel_set},
     shade::{RAMPS, ShadeTool},
 };
 mod animation;
@@ -247,7 +247,7 @@ impl AsciiArtEditor {
 
     fn handle_canvas_event(&mut self, event: CanvasEvent) {
         match event {
-            CanvasEvent::Press { x, y, primary, mods, lower } => {
+            CanvasEvent::Press { x, y, primary, mods, sub } => {
                 if self.drawing { return; }
                 self.stop_playback();
                 self.nudge_group += 1;
@@ -256,7 +256,7 @@ impl AsciiArtEditor {
 
                 // Alt+click with a drawing tool samples like the eyedropper (and keeps sampling while dragged).
                 if tool == ToolType::Pixel && mods.alt {
-                    self.pick_pixel(x, y, lower, primary);
+                    self.pick_pixel(x, y, sub, primary);
                     return;
                 }
                 if tool == ToolType::Eyedropper || (mods.alt && tool.draws()) {
@@ -290,7 +290,10 @@ impl AsciiArtEditor {
 
                 match tool {
                     ToolType::Brush  => { self.tools.brush.on_press(&mut self.doc, x, y, &ctx); }
-                    ToolType::Pixel  => self.tools.pixel.on_press(&mut self.doc, x, y * 2 + lower as usize, &ctx),
+                    ToolType::Pixel  => {
+                        let grid = self.tool_options.pixel_grid;
+                        self.tools.pixel.on_press(&mut self.doc, grid.pixel_at(x, y, sub), grid, &ctx);
+                    }
                     ToolType::Shade  => {
                         let ramp = self.ramp();
                         self.tools.shade.on_press(&mut self.doc, x, y, &ctx, ramp);
@@ -303,12 +306,15 @@ impl AsciiArtEditor {
                 }
             }
 
-            CanvasEvent::Drag { x, y, lower } => {
+            CanvasEvent::Drag { x, y, sub } => {
                 if !self.drawing { return; }
                 let ctx = self.draw_context(self.last_primary);
                 match self.stroke_tool {
                     ToolType::Brush  => { self.tools.brush.on_drag(&mut self.doc, x, y, &ctx); }
-                    ToolType::Pixel  => self.tools.pixel.on_drag(&mut self.doc, x, y * 2 + lower as usize, &ctx),
+                    ToolType::Pixel  => {
+                        let grid = self.tool_options.pixel_grid;
+                        self.tools.pixel.on_drag(&mut self.doc, grid.pixel_at(x, y, sub), grid, &ctx);
+                    }
                     ToolType::Shade  => {
                         let ramp = self.ramp();
                         self.tools.shade.on_drag(&mut self.doc, x, y, &ctx, ramp);
@@ -393,11 +399,18 @@ impl AsciiArtEditor {
         }
     }
 
-    /// Alt+click with the Pixel tool: picks the colour of the half-block pixel.
-    fn pick_pixel(&mut self, x: usize, y: usize, lower: bool, primary: bool) {
+    /// Alt+click with the Pixel tool: picks the colour of the pixel under the pointer.
+    fn pick_pixel(&mut self, x: usize, y: usize, sub: (f32, f32), primary: bool) {
         if x >= self.doc.width || y >= self.doc.height { return; }
-        let (top, bottom) = halves(&self.doc.composite_cell(x, y));
-        let color = if lower { bottom } else { top }.unwrap_or(crate::document::Color::TRANSPARENT);
+        let cell = self.doc.composite_cell(x, y);
+        let grid = self.tool_options.pixel_grid;
+        let color = if grid == PixelGrid::Halves {
+            let (top, bottom) = halves(&cell);
+            if sub.1 >= 0.5 { bottom } else { top }.unwrap_or(crate::document::Color::TRANSPARENT)
+        } else {
+            let (px, py) = grid.pixel_at(0, 0, sub);
+            if pixel_set(&cell, grid, (px, py)) { cell.fg } else { cell.bg }
+        };
         let slot = if primary { &mut self.color_panel.primary_fg } else { &mut self.color_panel.secondary_fg };
         *slot = color;
     }
@@ -985,6 +998,7 @@ impl eframe::App for AsciiArtEditor {
                     shape: self.shape_for(self.active_tool),
                     ramp: self.ramp(),
                     gradient: self.gradient_settings(),
+                    pixel_grid: self.tool_options.pixel_grid,
                 };
                 // Space + drag pans, like in Photoshop.
                 let pan_mode = !self.drawing

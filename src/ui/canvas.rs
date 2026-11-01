@@ -3,6 +3,7 @@ use crate::document::{Document, Stack};
 use crate::theme;
 use crate::tools::*;
 use crate::tools::gradient::GradientSettings;
+use crate::tools::pixel::PixelGrid;
 use crate::tools::shapes::{Shape, ShapeMods};
 use crate::ui::glyph_render;
 
@@ -23,8 +24,8 @@ pub struct CanvasState {
     /// The active layer's previous and next animation frames show faintly where it is empty.
     pub onion_skin: bool,
     pub cursor_cell: Option<(usize, usize)>,
-    /// The pointer is in the bottom half of `cursor_cell`.
-    pub cursor_lower: bool,
+    /// Where the pointer is inside `cursor_cell` (0..1 across and down).
+    pub cursor_sub: (f32, f32),
     pub march_phase: f32,
     /// Screen area of the canvas view in the last frame.
     pub view_rect: Rect,
@@ -40,7 +41,7 @@ impl Default for CanvasState {
             show_grid: true,
             onion_skin: false,
             cursor_cell: None,
-            cursor_lower: false,
+            cursor_sub: (0.0, 0.0),
             march_phase: 0.0,
             view_rect: Rect::NOTHING,
             fit_pending: true,
@@ -77,10 +78,12 @@ impl CanvasState {
         )
     }
 
-    /// Is `pos` in the bottom half of its cell?
-    pub fn in_lower_half(&self, pos: Pos2, canvas_origin: Pos2) -> bool {
-        let rel = (pos - canvas_origin - self.offset).y / self.cell_size().y;
-        rel - rel.floor() >= 0.5
+    /// Where `pos` is inside its cell, 0..1 across and down.
+    pub fn sub_position(&self, pos: Pos2, canvas_origin: Pos2) -> (f32, f32) {
+        let rel = pos - canvas_origin - self.offset;
+        let cs = self.cell_size();
+        let (x, y) = (rel.x / cs.x, rel.y / cs.y);
+        (x - x.floor(), y - y.floor())
     }
 
     pub fn cell_rect(&self, x: usize, y: usize, canvas_origin: Pos2) -> Rect {
@@ -139,9 +142,9 @@ fn canvas_origin(view: Rect) -> Pos2 {
 }
 
 pub enum CanvasEvent {
-    /// `lower`: the pointer is in the bottom half of the cell (half-block pixels).
-    Press   { x: usize, y: usize, primary: bool, mods: Modifiers, lower: bool },
-    Drag    { x: usize, y: usize, lower: bool },
+    /// `sub`: where the pointer is inside the cell, 0..1 across and down (for pixels in cells).
+    Press   { x: usize, y: usize, primary: bool, mods: Modifiers, sub: (f32, f32) },
+    Drag    { x: usize, y: usize, sub: (f32, f32) },
     /// Where the pointer was released, clamped to the document.
     Release { x: usize, y: usize, mods: Modifiers },
 }
@@ -155,6 +158,7 @@ pub struct PreviewSettings {
     pub shape: Option<Shape>,
     pub ramp: &'static str,
     pub gradient: GradientSettings,
+    pub pixel_grid: PixelGrid,
 }
 
 /// Shift constrains a shape, Alt draws it from the centre.
@@ -193,7 +197,7 @@ pub fn draw_canvas(
     } else {
         None
     };
-    state.cursor_lower = hover_pos.is_some_and(|p| state.in_lower_half(p, origin));
+    state.cursor_sub = hover_pos.map_or((0.0, 0.0), |p| state.sub_position(p, origin));
 
     let cs = state.cell_size();
     let canvas_rect = Rect::from_min_size(
@@ -263,7 +267,7 @@ pub fn draw_canvas(
 
     let mods = ui.input(|i| i.modifiers);
     if let Some((cx, cy)) = state.cursor_cell.filter(|_| !pan_mode) {
-        let preview = get_preview(active_tool, tools, doc, (cx, cy, state.cursor_lower), ctx_tool, settings, mods);
+        let preview = get_preview(active_tool, tools, doc, (cx, cy, state.cursor_sub), ctx_tool, settings, mods);
         let visible = |&&(px, py, _): &&(usize, usize, _)| (x0..x1).contains(&px) && (y0..y1).contains(&py);
         for (px, py, cell) in preview.iter().filter(visible) {
             // Show the result as it will look, with the other layers.
@@ -362,8 +366,8 @@ pub fn draw_canvas(
             if let Some(p) = pos
                 && let Some((x, y)) = state.screen_to_cell(p, origin).filter(in_doc)
             {
-                let lower = state.in_lower_half(p, origin);
-                events.push(CanvasEvent::Press { x, y, primary, mods, lower });
+                let sub = state.sub_position(p, origin);
+                events.push(CanvasEvent::Press { x, y, primary, mods, sub });
             }
         } else if resp.hovered()
             && ui.input(|i| i.pointer.button_pressed(button) && i.pointer.button_released(button))
@@ -373,8 +377,8 @@ pub fn draw_canvas(
             if let Some(p) = pos
                 && let Some((x, y)) = state.screen_to_cell(p, origin).filter(in_doc)
             {
-                let lower = state.in_lower_half(p, origin);
-                events.push(CanvasEvent::Press { x, y, primary, mods, lower });
+                let sub = state.sub_position(p, origin);
+                events.push(CanvasEvent::Press { x, y, primary, mods, sub });
                 events.push(CanvasEvent::Release { x, y, mods });
             }
         }
@@ -386,7 +390,7 @@ pub fn draw_canvas(
         && let Some(p) = resp.interact_pointer_pos()
         && let Some((x, y)) = state.screen_to_cell(p, origin)
     {
-        events.push(CanvasEvent::Drag { x, y, lower: state.in_lower_half(p, origin) });
+        events.push(CanvasEvent::Drag { x, y, sub: state.sub_position(p, origin) });
     }
 
     if resp.drag_stopped() {
@@ -430,14 +434,14 @@ fn get_preview(
     tool: ToolType,
     tools: &crate::app::ToolState,
     doc: &Document,
-    (x, y, lower): (usize, usize, bool),
+    (x, y, sub): (usize, usize, (f32, f32)),
     ctx: &DrawContext,
     settings: PreviewSettings,
     mods: Modifiers,
 ) -> Vec<(usize, usize, crate::document::Cell)> {
     match (tool, settings.shape) {
         (ToolType::Brush, _) => tools.brush.preview(doc, x, y, ctx),
-        (ToolType::Pixel, _) => tools.pixel.preview(doc, x, y * 2 + lower as usize, ctx),
+        (ToolType::Pixel, _) => tools.pixel.preview(doc, settings.pixel_grid.pixel_at(x, y, sub), settings.pixel_grid, ctx),
         (ToolType::Shade, _) => tools.shade.preview(doc, x, y, ctx, settings.ramp),
         (ToolType::Gradient, _) => tools.gradient.preview(doc, (x, y), ctx, settings.gradient),
         (_, Some(shape)) => tools.shape.preview(doc, shape, (x, y), shape_mods(mods), ctx),

@@ -1,7 +1,7 @@
 use egui::*;
 use crate::document::Color;
 use crate::theme;
-use crate::tools::{Channels, Mirror, border::BorderStyle, gradient::GradientShape};
+use crate::tools::{Channels, Mirror, border::BorderStyle, gradient::GradientShape, pixel::PixelGrid};
 use crate::ui::widgets::{color_chip, parse_hex, section_label, to_hex};
 
 /// One of the four colour slots.
@@ -226,6 +226,8 @@ pub struct ToolOptions {
     /// Index into `shade::RAMPS` (Shade and Gradient).
     pub ramp:          usize,
     pub gradient:      GradientShape,
+    /// How finely the Pixel tool splits a cell.
+    pub pixel_grid:    PixelGrid,
     /// Gradient glyphs are dithered.
     pub dither:        bool,
     pub channels:      Channels,
@@ -241,6 +243,7 @@ impl Default for ToolOptions {
             line_box:     false,
             ramp:         0,
             gradient:     GradientShape::Linear,
+            pixel_grid:   PixelGrid::Halves,
             dither:       true,
             channels:     Channels::default(),
             mirror:       Mirror::default(),

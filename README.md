@@ -11,7 +11,7 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 | Category | Details |
 |---|---|
 | **Tools** | Select, Brush, Pixel, Shade, Eraser, Flood Fill, Gradient, Eyedropper, Text, Line, Rectangle, Ellipse, Border Box — left button uses the primary slot, right button the secondary; Shift / Alt square or centre shapes |
-| **ASCII art** | **Pixel** paints square pixels as half blocks (`▀▄█`, two per cell); **Shade** steps density (`░▒▓█`, ` .:-=+*#%@`); **Gradient** fills the selection with a linear or radial ramp of glyphs (dithered) and colours (blended in OKLab); box lines and borders **join automatically** (`├ ┬ ┼`, double lines too); **symmetry** mirrors strokes and turns glyphs to match |
+| **ASCII art** | **Pixel** paints pixels inside cells: half blocks (`▀▄█`, 1×2, two colours per cell), quarters (2×2), sixths (2×3) or braille dots (2×4, `⣿`); **Shade** steps density (`░▒▓█`, ` .:-=+*#%@`); **Gradient** fills the selection with a linear or radial ramp of glyphs (dithered) and colours (blended in OKLab); box lines and borders **join automatically** (`├ ┬ ┼`, double lines too); **symmetry** mirrors strokes and turns glyphs to match |
 | **Pictures** | Import PNG / JPEG / GIF / WebP as half blocks, ASCII, shades or braille — colour or mono, dithering, brightness / contrast, live preview |
 | **Banners** | Big FIGlet letters (Standard, Small, Slant, Big, Shadow, Mini, Banner) |
 | **Paint channels** | Glyph / Fore / Back toggles: paint, fill, erase or pick only the character, only the colour, or only the background |
@@ -89,7 +89,7 @@ cargo build --release
 | `S` | Select |
 | `B` | Brush |
 | `E` | Eraser |
-| `P` | Pixel (half-block pixels) |
+| `P` | Pixel (half blocks, quarters, sixths or braille dots; right button: secondary colour / clear a dot) |
 | `G` | Shade (right button: lighter) |
 | `F` | Flood Fill |
 | `U` | Gradient (right button: reversed) |
