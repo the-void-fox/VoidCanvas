@@ -5,7 +5,7 @@ use eframe::egui::{self, *};
 use super::AsciiArtEditor;
 use crate::document::Document;
 use crate::history::Command;
-use crate::ui::layer_panel::LayerAction;
+use crate::ui::layer_panel::{LayerAction, layer_menu};
 use crate::ui::widgets::{icon_button, icon_toggle};
 use crate::{icons, theme};
 
@@ -16,6 +16,8 @@ pub struct Playback {
     elapsed: f64,
     /// Frame durations before a duration field started changing (one undo step per edit).
     timing_before: Option<Vec<u32>>,
+    /// Frames picked together in the timeline (Ctrl / Shift + click); empty: just the shown one.
+    pub selected: std::collections::BTreeSet<usize>,
 }
 
 /// Width of the layer column and height of the frame-number row of the timeline.
@@ -31,6 +33,8 @@ const ONION_NEXT: Color32 = Color32::from_rgb(120, 220, 230);
 /// What the user did in the frame grid, carried out once drawing is done.
 enum GridAction {
     Go { layer: Option<usize>, frame: usize },
+    /// Ctrl+click adds or takes out one frame, Shift+click picks a range from the shown one.
+    Pick { frame: usize, range: bool },
     Move { from: usize, to: usize },
     NewFrame { empty: bool },
     DeleteFrame,
@@ -50,12 +54,36 @@ impl AsciiArtEditor {
         self.history.execute_as(Command::FrameAdd { index: self.doc.frame + 1, data }, label, &mut self.doc);
     }
 
+    /// The frames the next frame command works on: those picked in the timeline, or the shown one.
+    pub(crate) fn frames_in_hand(&self) -> Vec<usize> {
+        let picked: Vec<usize> = self.playback.selected.iter().copied().filter(|&f| f < self.doc.frame_count()).collect();
+        if picked.len() > 1 { picked } else { vec![self.doc.frame] }
+    }
+
+    /// Deletes the frames in hand (one undo step); one frame always stays.
     pub(super) fn delete_frame(&mut self) {
-        if self.doc.frame_count() < 2 { return; }
+        let frames = self.frames_in_hand();
+        if frames.len() >= self.doc.frame_count() {
+            self.show_status("An animation keeps at least one frame");
+            return;
+        }
         self.stop_playback();
-        let index = self.doc.frame;
-        let data = self.doc.frame_data(index);
-        self.history.execute(Command::FrameRemove { index, data }, &mut self.doc);
+        // From the last, so the indices of the rest stay right.
+        let cmds: Vec<Command> = frames.iter().rev().map(|&index| Command::FrameRemove { index, data: self.doc.frame_data(index) }).collect();
+        let label = if cmds.len() == 1 { "Delete Frame" } else { "Delete Frames" };
+        self.history.execute_as(Command::Group(cmds), label, &mut self.doc);
+        self.playback.selected.clear();
+    }
+
+    /// Copies of the frames in hand, right after the last of them (one undo step).
+    pub(crate) fn duplicate_frames(&mut self) {
+        let frames = self.frames_in_hand();
+        let after = frames.last().copied().unwrap_or(self.doc.frame) + 1;
+        let cmds: Vec<Command> = frames.iter().enumerate().map(|(k, &f)| Command::FrameAdd { index: after + k, data: self.doc.frame_data(f) }).collect();
+        self.stop_playback();
+        let label = if cmds.len() == 1 { "New Frame" } else { "Duplicate Frames" };
+        self.history.execute_as(Command::Group(cmds), label, &mut self.doc);
+        self.playback.selected.clear();
     }
 
     /// Moves the shown frame `step` places to the right (left if negative).
@@ -246,9 +274,14 @@ impl AsciiArtEditor {
                 let color = if active { theme::TEXT } else if layer.visible { theme::TEXT_DIM } else { theme::TEXT_FAINT };
                 ui.add(Label::new(RichText::new(&layer.name).color(color)).truncate().selectable(false));
             });
-            if resp.response.clicked() && action.is_none() {
+            if (resp.response.clicked() || resp.response.secondary_clicked()) && action.is_none() {
                 action = Some(LayerAction::Select(i));
             }
+            resp.response.context_menu(|ui| {
+                if let Some(chosen) = layer_menu(ui, &self.doc, i) {
+                    action = Some(chosen);
+                }
+            });
         }
         if let Some(action) = action {
             self.apply_layer_action(action);
@@ -288,6 +321,10 @@ impl AsciiArtEditor {
             let r = header(f);
             let current = f == doc.frame;
             let resp = ui.interact(r, ui.id().with(("frame", f)), Sense::click_and_drag());
+            if self.playback.selected.len() > 1 && self.playback.selected.contains(&f) {
+                painter.rect_filled(r.shrink(2.0), 4.0, theme::ACCENT_SOFT);
+                painter.rect_stroke(r.shrink(2.0), 4.0, Stroke::new(1.0, theme::ACCENT), StrokeKind::Inside);
+            }
             let color = if current { theme::ACCENT } else if resp.hovered() { theme::TEXT } else { theme::TEXT_DIM };
             let font = if current { theme::semibold(12.0) } else { theme::mono(11.0) };
             painter.text(r.center(), Align2::CENTER_CENTER, (f + 1).to_string(), font, color);
@@ -310,7 +347,14 @@ impl AsciiArtEditor {
                 && let Some(p) = pointer
             {
                 act = Some(GridAction::Move { from: f, to: target(p.x) });
-            } else if resp.clicked() || resp.secondary_clicked() {
+            } else if resp.clicked() {
+                let mods = ui.input(|i| i.modifiers);
+                act = Some(if mods.command || mods.shift {
+                    GridAction::Pick { frame: f, range: mods.shift }
+                } else {
+                    GridAction::Go { layer: None, frame: f }
+                });
+            } else if resp.secondary_clicked() && !self.playback.selected.contains(&f) {
                 act = Some(GridAction::Go { layer: None, frame: f });
             }
             if self.playback.playing && current {
@@ -321,9 +365,10 @@ impl AsciiArtEditor {
             let resp = resp.on_hover_ui(|ui| {
                 preview(ui, doc, f);
                 ui.label(RichText::new(format!("Frame {}  ·  {ms} ms", f + 1)).color(theme::TEXT_DIM));
-                ui.label(RichText::new("Drag to move · right click for more").color(theme::TEXT_FAINT).small());
+                ui.label(RichText::new("Drag to move · Ctrl / Shift + click to pick several · right click for more").color(theme::TEXT_FAINT).small());
             });
-            resp.context_menu(|ui| editing |= frame_menu(ui, doc, f, &mut act));
+            let in_hand = if self.playback.selected.len() > 1 && self.playback.selected.contains(&f) { self.playback.selected.len() } else { 1 };
+            resp.context_menu(|ui| editing |= frame_menu(ui, doc, f, in_hand, &mut act));
 
             for row in 0..layers {
                 let layer = layers - 1 - row;
@@ -362,17 +407,37 @@ impl AsciiArtEditor {
         match act {
             Some(GridAction::Go { layer, frame }) => {
                 self.stop_playback();
+                self.playback.selected.clear();
                 if let Some(layer) = layer {
                     self.apply_layer_action(LayerAction::Select(layer));
                 }
                 self.go_to_frame(frame);
             }
+            Some(GridAction::Pick { frame, range }) => {
+                let picked = &mut self.playback.selected;
+                if picked.is_empty() {
+                    picked.insert(self.doc.frame);
+                }
+                if range {
+                    let (a, b) = (self.doc.frame.min(frame), self.doc.frame.max(frame));
+                    picked.extend(a..=b);
+                } else if !picked.remove(&frame) {
+                    picked.insert(frame);
+                }
+            }
             Some(GridAction::Move { from, to }) => self.move_frame_to(from, to),
-            Some(GridAction::NewFrame { empty }) => self.add_frame(empty),
+            Some(GridAction::NewFrame { empty: false }) => self.duplicate_frames(),
+            Some(GridAction::NewFrame { empty: true }) => self.add_frame(true),
             Some(GridAction::DeleteFrame) => self.delete_frame(),
             Some(GridAction::Duration { frame, ms }) => {
                 self.playback.timing_before.get_or_insert_with(|| self.doc.durations.clone());
-                self.doc.durations[frame] = ms;
+                // A duration set on one of the picked frames goes to all of them.
+                let picked = self.playback.selected.len() > 1 && self.playback.selected.contains(&frame);
+                let frames: Vec<usize> = if picked { self.playback.selected.iter().copied().collect() } else { vec![frame] };
+                let count = self.doc.durations.len();
+                for f in frames.into_iter().filter(|&f| f < count) {
+                    self.doc.durations[f] = ms;
+                }
             }
             Some(GridAction::DurationForAll(ms)) => {
                 let old = self.doc.durations.clone();
@@ -387,8 +452,9 @@ impl AsciiArtEditor {
     }
 }
 
-/// Right click on a frame number. Returns whether its duration field is in use.
-fn frame_menu(ui: &mut Ui, doc: &Document, frame: usize, act: &mut Option<GridAction>) -> bool {
+/// Right click on a frame number (`count` frames picked with it). Returns whether its duration
+/// field is in use.
+fn frame_menu(ui: &mut Ui, doc: &Document, frame: usize, count: usize, act: &mut Option<GridAction>) -> bool {
     let mut editing = false;
     ui.horizontal(|ui| {
         ui.label("Duration");
@@ -404,7 +470,8 @@ fn frame_menu(ui: &mut Ui, doc: &Document, frame: usize, act: &mut Option<GridAc
         ui.close();
     }
     ui.separator();
-    if ui.button("New Frame (Copy)").clicked() {
+    let copy = if count > 1 { format!("Duplicate {count} Frames") } else { "New Frame (Copy)".to_owned() };
+    if ui.button(copy).clicked() {
         *act = Some(GridAction::NewFrame { empty: false });
         ui.close();
     }
@@ -412,7 +479,8 @@ fn frame_menu(ui: &mut Ui, doc: &Document, frame: usize, act: &mut Option<GridAc
         *act = Some(GridAction::NewFrame { empty: true });
         ui.close();
     }
-    if ui.add_enabled(doc.frame_count() > 1, Button::new("Delete Frame")).clicked() {
+    let delete = if count > 1 { format!("Delete {count} Frames") } else { "Delete Frame".to_owned() };
+    if ui.add_enabled(doc.frame_count() > count, Button::new(delete)).clicked() {
         *act = Some(GridAction::DeleteFrame);
         ui.close();
     }

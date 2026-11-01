@@ -846,7 +846,7 @@ impl AsciiArtEditor {
         let n = self.doc.layers.len();
         let active = self.doc.active_layer;
         // The 3D window holds a layer's place; anything that moves layers closes it first.
-        if !matches!(action, LayerAction::Select(_) | LayerAction::ToggleVisible(_) | LayerAction::ToggleLock(_) | LayerAction::Rename(..) | LayerAction::Style { .. }) {
+        if !matches!(action, LayerAction::Select(_) | LayerAction::ToggleVisible(_) | LayerAction::ToggleLock(_) | LayerAction::Rename(..) | LayerAction::Style { .. } | LayerAction::StartRename(_) | LayerAction::SelectContent(_)) {
             self.close_3d();
         }
 
@@ -924,6 +924,33 @@ impl AsciiArtEditor {
             LayerAction::Edit3D(i) => {
                 if i < n { self.doc.active_layer = i; }
                 self.edit_3d(i);
+                return;
+            }
+            LayerAction::Rasterize3D(i) => {
+                if i < n { self.doc.active_layer = i; }
+                self.rasterize_3d();
+                return;
+            }
+            LayerAction::StartRename(i) => {
+                if let Some(layer) = self.doc.layers.get(i) {
+                    self.layer_panel.start_rename(i, &layer.name);
+                }
+                return;
+            }
+            LayerAction::SelectContent(i) => {
+                let Some(layer) = self.doc.layers.get(i) else { return };
+                let filled = (0..self.doc.height).flat_map(|y| (0..self.doc.width).map(move |x| (x, y))).filter(|&(x, y)| layer.get(x, y).is_some_and(|c| !c.is_empty()));
+                let bounds = filled.fold(None, |b: Option<(usize, usize, usize, usize)>, (x, y)| {
+                    Some(b.map_or((x, y, x, y), |(x1, y1, x2, y2)| (x1.min(x), y1.min(y), x2.max(x), y2.max(y))))
+                });
+                match bounds {
+                    Some(sel) => {
+                        self.tools.selection.clear();
+                        self.tools.selection.selection = Some(sel);
+                        self.active_tool = ToolType::Select;
+                    }
+                    None => self.show_status("Nothing is drawn on this layer"),
+                }
                 return;
             }
             LayerAction::Style { index, blend, opacity, done } => {

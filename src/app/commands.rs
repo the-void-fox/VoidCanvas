@@ -236,10 +236,12 @@ impl AsciiArtEditor {
             Action::ToggleOnionSkin => self.canvas_state.onion_skin = !self.canvas_state.onion_skin,
             Action::Undo => {
                 self.close_3d();
+                self.playback.selected.clear();
                 if !self.drawing && self.history.undo(&mut self.doc) { self.show_status("Undo"); }
             }
             Action::Redo => {
                 self.close_3d();
+                self.playback.selected.clear();
                 if !self.drawing && self.history.redo(&mut self.doc) { self.show_status("Redo"); }
             }
             Action::Copy => { self.copy(ctx); }

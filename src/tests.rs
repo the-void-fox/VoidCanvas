@@ -505,6 +505,57 @@ mod ui {
     }
 
     #[test]
+    fn several_frames_go_or_copy_in_one_step() {
+        let mut app = AsciiArtEditor::default();
+        app.doc = crate::document::Document::new(2, 1);
+        let ctx = egui::Context::default();
+        for ch in ['b', 'c', 'd', 'e'] {
+            app.run(crate::app::commands::Action::NewFrame, &ctx);
+            app.doc.layers[0].put(0, 0, crate::document::Cell::new(ch, crate::document::Color::WHITE, crate::document::Color::TRANSPARENT));
+        }
+        app.doc.show_frame(0);
+        app.doc.layers[0].put(0, 0, crate::document::Cell::new('a', crate::document::Color::WHITE, crate::document::Color::TRANSPARENT));
+        let frames = |app: &AsciiArtEditor| (0..app.doc.frame_count()).map(|f| app.doc.composite_in(f, 0, 0).ch).collect::<String>();
+        assert_eq!(frames(&app), "abcde");
+
+        app.playback.selected = [1, 3].into();
+        app.run(crate::app::commands::Action::DeleteFrame, &ctx);
+        assert_eq!(frames(&app), "ace");
+        assert_eq!(app.history.labels().0.last(), Some(&"Delete Frames"));
+        app.run(crate::app::commands::Action::Undo, &ctx);
+        assert_eq!(frames(&app), "abcde", "one undo step brings both back");
+
+        app.playback.selected = [0, 1].into();
+        app.duplicate_frames();
+        assert_eq!(frames(&app), "ababcde");
+
+        app.playback.selected = (0..7).collect();
+        app.run(crate::app::commands::Action::DeleteFrame, &ctx);
+        assert_eq!(app.doc.frame_count(), 7, "the last frame can't go");
+    }
+
+    #[test]
+    fn right_clicking_a_layer_opens_its_menu() {
+        let mut harness = harness();
+        harness.get_all_by_label("Background").next().unwrap().click_secondary();
+        harness.step();
+        harness.step();
+        harness.get_by_label("Duplicate").hover();
+        harness.step();
+        harness.get_by_label("Duplicate").click();
+        harness.step();
+        assert_eq!(harness.state().doc.layers.len(), 2);
+        harness.get_all_by_label("Background").next().unwrap().click_secondary();
+        harness.step();
+        harness.step();
+        harness.get_by_label("Select Content").hover();
+        harness.step();
+        harness.get_by_label("Select Content").click();
+        harness.step();
+        assert_eq!(harness.state().tools.selection.selection, None, "an empty layer has nothing to select");
+    }
+
+    #[test]
     fn ctrl_b_makes_the_selection_the_brush() {
         let mut harness = harness();
         set_row(&mut harness, 0, 0, "<>");

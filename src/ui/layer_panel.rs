@@ -20,6 +20,11 @@ pub enum LayerAction {
     New3D,
     /// Open the 3D window on a 3D layer.
     Edit3D(usize),
+    Rasterize3D(usize),
+    /// Start renaming in the Layers panel.
+    StartRename(usize),
+    /// Select the bounding box of what's drawn on the layer.
+    SelectContent(usize),
     /// Blend mode and opacity of a layer, changed live; `done` once the edit is over (one undo step).
     Style { index: usize, blend: Blend, opacity: f32, done: bool },
 }
@@ -34,6 +39,12 @@ pub struct LayerPanel {
 }
 
 impl LayerPanel {
+    pub fn start_rename(&mut self, index: usize, name: &str) {
+        self.rename_idx = Some(index);
+        self.rename_buf = name.to_owned();
+        self.rename_focus = true;
+    }
+
     pub fn show(&mut self, ui: &mut Ui, doc: &Document) -> Option<LayerAction> {
         let mut action = None;
 
@@ -202,10 +213,16 @@ impl LayerPanel {
                     }
 
                     if row_resp.double_clicked() {
-                        self.rename_idx = Some(layer_idx);
-                        self.rename_buf = layer.name.clone();
-                        self.rename_focus = true;
+                        self.start_rename(layer_idx, &layer.name);
                     }
+                    if row_resp.secondary_clicked() && !is_active {
+                        action = Some(LayerAction::Select(layer_idx));
+                    }
+                    row_resp.context_menu(|ui| {
+                        if let Some(chosen) = layer_menu(ui, doc, layer_idx) {
+                            action = Some(chosen);
+                        }
+                    });
 
                     ui.add_space(2.0);
                 }
@@ -245,4 +262,43 @@ impl LayerPanel {
 
         action
     }
+}
+
+/// The right-click menu of a layer (it is made the active one first).
+pub fn layer_menu(ui: &mut Ui, doc: &Document, index: usize) -> Option<LayerAction> {
+    let mut action = None;
+    let mut item = |ui: &mut Ui, enabled: bool, label: &str, act: LayerAction| {
+        if ui.add_enabled(enabled, Button::new(label)).clicked() {
+            action = Some(act);
+            ui.close();
+        }
+    };
+    let layer = &doc.layers[index];
+    let n = doc.layers.len();
+    item(ui, true, "Rename…", LayerAction::StartRename(index));
+    item(ui, true, "New Layer Above", LayerAction::Add);
+    item(ui, true, "Duplicate", LayerAction::Duplicate);
+    item(ui, n > 1, "Delete", LayerAction::Remove);
+    item(ui, index > 0, "Merge Down", LayerAction::MergeDown);
+    ui.separator();
+    item(ui, index + 1 < n, "Move Up", LayerAction::MoveUp);
+    item(ui, index > 0, "Move Down", LayerAction::MoveDown);
+    item(ui, true, if layer.visible { "Hide" } else { "Show" }, LayerAction::ToggleVisible(index));
+    item(ui, true, if layer.locked { "Unlock" } else { "Lock" }, LayerAction::ToggleLock(index));
+    item(ui, true, "Select Content", LayerAction::SelectContent(index));
+    let mut blend = None;
+    ui.menu_button(format!("Blend: {}", layer.blend.name()), |ui| {
+        for mode in Blend::ALL {
+            if ui.selectable_label(layer.blend == mode, mode.name()).on_hover_text(mode.describe()).clicked() {
+                blend = Some(LayerAction::Style { index, blend: mode, opacity: layer.opacity, done: true });
+                ui.close();
+            }
+        }
+    });
+    if layer.scene.is_some() {
+        ui.separator();
+        item(ui, true, "Edit 3D…", LayerAction::Edit3D(index));
+        item(ui, true, "Rasterize 3D", LayerAction::Rasterize3D(index));
+    }
+    action.or(blend)
 }
