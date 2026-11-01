@@ -1,5 +1,6 @@
 pub mod cell;
 pub mod layer;
+pub mod codec;
 #[allow(clippy::module_inception)]
 pub mod document;
 

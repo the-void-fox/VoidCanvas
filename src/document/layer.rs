@@ -31,6 +31,25 @@ impl Layer {
         }
     }
 
+    /// A layer holding `frames` (the cells of every animation frame), with `shown` in front.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_frames(
+        name: String,
+        width: usize,
+        height: usize,
+        visible: bool,
+        locked: bool,
+        opacity: f32,
+        mut frames: Vec<Vec<Cell>>,
+        shown: usize,
+    ) -> Self {
+        let cells = std::mem::take(&mut frames[shown]);
+        if frames.len() == 1 {
+            frames.clear();
+        }
+        Self { name, width, height, visible, locked, opacity, cells, frames }
+    }
+
     fn blank(&self) -> Vec<Cell> {
         vec![Cell::default(); self.width * self.height]
     }

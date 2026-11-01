@@ -756,7 +756,8 @@ mod ui {
         harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::S);
         harness.step();
         assert!(harness.state().file_browser.is_none());
-        assert!(std::fs::read_to_string(&path).unwrap().contains("\"y\""));
+        let saved = crate::app::file_io::parse_document(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.layers[0].get(0, 0).unwrap().ch, 'y');
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1479,6 +1480,145 @@ mod scripts {
         assert_eq!(row(&doc, 0), "    ");
         history.redo(&mut doc);
         assert_eq!((doc.frame_count(), doc.composite_in(1, 0, 0).ch), (2, 'a'));
+    }
+}
+
+mod file_format {
+    use crate::app::file_io::{document_bytes, parse_document};
+    use crate::document::{Cell, Color, Document, FrameData, Layer, codec};
+
+    /// A small deterministic random source for building test pictures.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    /// Patches and runs of a few glyphs and colours, like real art, plus noise.
+    fn random_doc(rng: &mut Rng, w: usize, h: usize, layers: usize, frames: usize) -> Document {
+        const GLYPHS: [char; 8] = [' ', '#', '█', '░', '╬', '⣿', '😀', '\u{10FFFF}'];
+        let colors = [Color::WHITE, Color::TRANSPARENT, Color::new(255, 0, 0, 255), Color::new(1, 2, 3, 0), Color::new(9, 200, 77, 128)];
+        let mut doc = Document::new(w, h);
+        for l in 1..layers {
+            doc.insert_layer(l, Layer::new(w, h, format!("Layer ü {l}")));
+        }
+        for _ in 1..frames {
+            let data = doc.frame_data(doc.frame);
+            doc.insert_frame(doc.frame_count(), data);
+        }
+        for f in 0..frames {
+            doc.show_frame(f);
+            for layer in &mut doc.layers {
+                for _ in 0..(w * h / 3).max(1) {
+                    let (x, y) = (rng.below(w), rng.below(h));
+                    let run = 1 + rng.below(6);
+                    let cell = Cell::new(GLYPHS[rng.below(8)], colors[rng.below(5)].clone(), colors[rng.below(5)].clone());
+                    for dx in 0..run {
+                        layer.set((x + dx).min(w - 1), y, cell.clone());
+                    }
+                }
+            }
+        }
+        doc.layers[0].visible = false;
+        doc.layers[layers - 1].locked = true;
+        doc.layers[layers - 1].opacity = 0.37;
+        doc.durations = (0..frames).map(|f| [100, 100, 40, 2500][f % 4]).collect();
+        doc.show_frame(frames / 2);
+        doc.active_layer = layers / 2;
+        doc
+    }
+
+    fn round_trip(doc: &Document) -> Document {
+        // Both ways of writing colours must decode, whichever the encoder would pick.
+        for predicted in [false, true] {
+            let back = codec::decode(&codec::encode_with(doc, predicted)).unwrap_or_else(|e| panic!("{e}"));
+            assert!(codec::same_content(doc, &back), "predicted colours: {predicted}");
+        }
+        let bytes = codec::encode(doc);
+        let back = codec::decode(&bytes).unwrap_or_else(|e| panic!("{e}"));
+        assert!(codec::same_content(doc, &back), "the decoded document differs");
+        back
+    }
+
+    #[test]
+    fn the_demo_round_trips_and_shrinks() {
+        let doc = parse_document(&std::fs::read("examples/demo.vc").unwrap()).unwrap();
+        round_trip(&doc);
+        let json = serde_json::to_vec_pretty(&doc).unwrap().len();
+        let (bytes, compressed) = document_bytes(&doc).unwrap();
+        println!("demo.vc: JSON {json} bytes, compressed {} bytes", bytes.len());
+        assert!(compressed);
+        assert!(bytes.len() < 2328, "beats xz -9e on the JSON ({} bytes)", bytes.len());
+    }
+
+    #[test]
+    fn random_pictures_round_trip() {
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+        for (w, h, layers, frames) in [(1, 1, 1, 1), (1, 9, 1, 2), (9, 1, 2, 1), (13, 7, 3, 4), (40, 20, 2, 3)] {
+            let doc = random_doc(&mut rng, w, h, layers, frames);
+            let back = round_trip(&doc);
+            assert_eq!((back.frame, back.active_layer, back.layers[2.min(layers - 1)].name.clone()), (doc.frame, doc.active_layer, doc.layers[2.min(layers - 1)].name.clone()));
+        }
+        // Frames that mostly repeat the one before cost little.
+        let mut doc = random_doc(&mut rng, 40, 20, 1, 1);
+        let still = codec::encode(&doc).len();
+        for _ in 0..9 {
+            let mut data: FrameData = doc.frame_data(doc.frame);
+            data.cells[0][rng.below(800)] = Cell::new('*', Color::WHITE, Color::TRANSPARENT);
+            doc.insert_frame(doc.frame_count(), data);
+        }
+        round_trip(&doc);
+        let animated = codec::encode(&doc).len();
+        assert!(animated < still + 9 * 12, "ten nearly equal frames: {animated} bytes vs {still} for one");
+    }
+
+    #[test]
+    fn damage_is_reported_not_trusted() {
+        let mut rng = Rng(42);
+        let doc = random_doc(&mut rng, 12, 6, 2, 2);
+        let bytes = codec::encode(&doc);
+        let mut flipped = bytes.clone();
+        flipped[bytes.len() / 2] ^= 0x10;
+        assert!(codec::decode(&flipped).unwrap_err().contains("damaged"));
+        assert!(codec::decode(&bytes[..bytes.len() - 7]).is_err());
+        assert!(codec::decode(b"VOIDCANV").is_err());
+        let mut newer = bytes.clone();
+        newer[8] = 99;
+        assert!(codec::decode(&newer).unwrap_err().contains("newer"));
+        assert!(parse_document(b"\xff\xfe nonsense").is_err());
+
+        // Garbage that passes the checksum must still fail cleanly, never panic.
+        for round in 0..300 {
+            let mut junk = bytes[..bytes.len() - 4].to_vec();
+            for _ in 0..1 + round % 5 {
+                let i = 9 + rng.below(junk.len() - 9);
+                junk[i] = rng.next() as u8;
+            }
+            if round % 7 == 0 {
+                junk.truncate(9 + rng.below(junk.len() - 9));
+            }
+            let crc = crc32fast::hash(&junk);
+            junk.extend(crc.to_le_bytes());
+            let _ = codec::decode(&junk);
+        }
+    }
+
+    #[test]
+    fn json_files_from_before_still_open() {
+        let mut doc = Document::new(3, 2);
+        doc.layers[0].set(1, 1, Cell::new('J', Color::WHITE, Color::TRANSPARENT));
+        let json = serde_json::to_vec_pretty(&doc).unwrap();
+        let loaded = parse_document(&json).unwrap();
+        assert!(codec::same_content(&doc, &loaded));
     }
 }
 

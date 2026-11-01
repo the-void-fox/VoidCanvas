@@ -27,7 +27,7 @@ fn config_dir() -> Option<PathBuf> {
 }
 
 /// Writes next to the target first and then renames, so a failed write can't wipe the old file.
-pub fn write_atomically(path: &Path, data: &str) -> std::io::Result<()> {
+pub fn write_atomically(path: &Path, data: impl AsRef<[u8]>) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }

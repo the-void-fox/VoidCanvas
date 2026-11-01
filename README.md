@@ -26,7 +26,7 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 | **Scripting** | Edit → Script…: small [Rhai](https://rhai.rs) programs draw on the active layer (cells, text, lines, colours, noise, random, frames); examples included, a whole run is one undo step |
 | **Tabs** | Several documents at once, each with its own undo history, view and selection; `Ctrl+Tab` switches, `Ctrl+W` closes, quitting asks about each unsaved tab |
 | **Command palette** | `Ctrl+Shift+P` / `F1`: fuzzy-search every menu action, tool, layer action, palette and recent file; recently used commands come first |
-| **Files** | Native `.vc` format (JSON), `.txt` import / export, **ANSI** (24-bit colour) and **HTML** export, **PNG** export (opaque or transparent), animated **GIF** export, copy as text / ANSI, recent files, drag & drop, autosave of every unsaved tab with crash recovery |
+| **Files** | Native `.vc` format (compressed: each cell is predicted from its neighbours and the previous frame, colours optionally from a JPEG-LS-style predictor, all through an adaptive range coder; checksummed; old JSON files still open), `.txt` import / export, **ANSI** (24-bit colour) and **HTML** export, **PNG** export (opaque or transparent), animated **GIF** export, copy as text / ANSI, recent files, drag & drop, autosave of every unsaved tab with crash recovery |
 
 ---
 

@@ -22,7 +22,7 @@ mod chrome;
 pub(crate) mod commands;
 mod dialogs;
 pub(crate) mod file_dialog;
-mod file_io;
+pub(crate) mod file_io;
 mod import;
 pub(crate) mod replace;
 mod scripting;

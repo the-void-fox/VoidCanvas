@@ -12,6 +12,7 @@ image    = "0.25"
 ab_glyph = "0.2"
 rfd = "0.14"
 rhai = "1.27.0"
+crc32fast = "1.5.3"
 
 [profile.release]
 opt-level = 3

@@ -3,7 +3,7 @@
 use eframe::egui;
 
 use super::{AsciiArtEditor, PendingAction, file_dialog::FileAction, storage};
-use crate::document::{Color, Document};
+use crate::document::{Color, Document, codec};
 use crate::tools::selection::text_to_content;
 
 impl AsciiArtEditor {
@@ -28,7 +28,7 @@ impl AsciiArtEditor {
 
     /// Writes next to the target first and then renames, so a failed write can't wipe the old file.
     pub(super) fn write_file(&mut self, path: String) -> bool {
-        let data = match serde_json::to_string_pretty(&self.doc) {
+        let (data, compressed) = match document_bytes(&self.doc) {
             Ok(data) => data,
             Err(e) => {
                 self.show_status(format!("Save failed: {e}"));
@@ -42,7 +42,8 @@ impl AsciiArtEditor {
                 self.doc.modified = false;
                 self.refresh_autosave();
                 self.autosaved_version = self.history.version();
-                self.show_status(format!("Saved: {}", self.doc_name()));
+                let how = if compressed { "" } else { " (uncompressed)" };
+                self.show_status(format!("Saved{how}: {}", self.doc_name()));
                 true
             }
             Err(e) => {
@@ -65,7 +66,7 @@ impl AsciiArtEditor {
             self.show_status(format!("{} is already open", self.doc_name()));
             return;
         }
-        let data = match std::fs::read_to_string(path) {
+        let data = match std::fs::read(path) {
             Ok(data) => data,
             Err(e) => {
                 self.settings.forget_recent(&shown);
@@ -74,20 +75,16 @@ impl AsciiArtEditor {
             }
         };
         if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("txt")) {
-            self.import_text(path, &data);
+            self.import_text(path, &String::from_utf8_lossy(&data));
             return;
         }
-        let mut doc = match serde_json::from_str::<Document>(&data) {
+        let mut doc = match parse_document(&data) {
             Ok(doc) => doc,
             Err(e) => {
-                self.show_status(format!("Failed to parse file: {e}"));
+                self.show_status(format!("Can't open file: {e}"));
                 return;
             }
         };
-        if let Err(e) = doc.validate() {
-            self.show_status(format!("Can't open file: {e}"));
-            return;
-        }
         doc.file_path = Some(shown.clone());
         self.open_in_tab(doc);
         self.settings.add_recent(&shown);
@@ -113,4 +110,27 @@ impl AsciiArtEditor {
         let clipped = if block.len() > MAX || block.first().is_some_and(|r| r.len() > MAX) { " (clipped)" } else { "" };
         self.show_status(format!("Imported {name}: {width}×{height}{clipped}"));
     }
+}
+
+/// A document from the bytes of a `.vc` file: compressed, or JSON as older versions wrote.
+pub fn parse_document(bytes: &[u8]) -> Result<Document, String> {
+    let mut doc = if codec::is_binary(bytes) {
+        codec::decode(bytes)?
+    } else {
+        let text = std::str::from_utf8(bytes).map_err(|_| "not a Void Canvas file".to_owned())?;
+        serde_json::from_str::<Document>(text).map_err(|e| e.to_string())?
+    };
+    doc.validate()?;
+    Ok(doc)
+}
+
+/// The bytes of `doc` as a `.vc` file, and whether they are compressed. The compressed form
+/// is decoded again and compared before it is trusted; were that ever to fail, the document
+/// is written as JSON instead, so a bug in the codec can't lose work.
+pub fn document_bytes(doc: &Document) -> Result<(Vec<u8>, bool), String> {
+    let bytes = codec::encode(doc);
+    if codec::decode(&bytes).is_ok_and(|back| codec::same_content(doc, &back)) {
+        return Ok((bytes, true));
+    }
+    serde_json::to_vec_pretty(doc).map(|json| (json, false)).map_err(|e| e.to_string())
 }
