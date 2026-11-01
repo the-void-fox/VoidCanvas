@@ -40,6 +40,7 @@ pub const GRID_OFF: &str = "\u{F02C2}";
 pub const SEARCH: &str = "\u{F0349}";
 pub const FOLDER: &str = "\u{F024B}";
 pub const CLOSE: &str = "\u{F0156}";
+pub const ALERT: &str = "\u{F0026}";
 pub const PLAY: &str = "\u{F040A}";
 pub const PAUSE: &str = "\u{F03E4}";
 pub const FIRST: &str = "\u{F0600}";

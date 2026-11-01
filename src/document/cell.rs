@@ -29,6 +29,22 @@ impl Color {
         self.a == 0
     }
 
+    /// With its alpha scaled by `opacity` (0..1).
+    pub fn faded(&self, opacity: f32) -> Color {
+        if opacity >= 1.0 { return self.clone(); }
+        Color { a: (self.a as f32 * opacity.max(0.0)).round() as u8, ..self.clone() }
+    }
+
+    /// This colour painted over `below`, by alpha.
+    pub fn over(&self, below: &Color) -> Color {
+        if self.a == 255 || below.a == 0 { return self.clone(); }
+        if self.a == 0 { return below.clone(); }
+        let (ta, ba) = (self.a as f32 / 255.0, below.a as f32 / 255.0);
+        let a = ta + ba * (1.0 - ta);
+        let mix = |t: u8, b: u8| ((t as f32 * ta + b as f32 * ba * (1.0 - ta)) / a).round() as u8;
+        Color::new(mix(self.r, below.r), mix(self.g, below.g), mix(self.b, below.b), (a * 255.0).round() as u8)
+    }
+
     /// Like `==`, but every fully transparent colour counts as the same colour.
     pub fn same_as(&self, other: &Color) -> bool {
         (self.is_transparent() && other.is_transparent()) || self == other
@@ -79,18 +95,6 @@ impl Cell {
             && (self.ch == ' ' || self.fg.same_as(&other.fg))
     }
 
-    /// Composites `self` on top of `below`. Glyphs and backgrounds stack separately:
-    /// the topmost glyph is drawn over the topmost opaque background, so a background
-    /// painted on any layer goes behind the art instead of covering it.
-    pub fn over(&self, below: &Cell) -> Cell {
-        let (ch, fg) = if self.ch != ' ' {
-            (self.ch, self.fg.clone())
-        } else {
-            (below.ch, below.fg.clone())
-        };
-        let bg = if self.bg.is_transparent() { below.bg.clone() } else { self.bg.clone() };
-        Cell { ch, fg, bg }
-    }
 }
 
 impl Default for Cell {

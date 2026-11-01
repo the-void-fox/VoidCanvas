@@ -524,7 +524,9 @@ impl AsciiArtEditor {
                         }
                         if self.status_timer > 0.0 {
                             vdivider(ui);
-                            ui.label(RichText::new(&self.status_msg).size(12.0).color(theme::TEXT));
+                            let warning = self.status_msg.starts_with(icons::ALERT);
+                            let color = if warning { theme::WARNING } else { theme::TEXT };
+                            ui.label(RichText::new(&self.status_msg).size(12.0).color(color));
                         }
                     });
                 });

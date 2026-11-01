@@ -157,6 +157,11 @@ fn apply_command(cmd: &Command, doc: &mut Document) {
                 layer.name = new.clone();
             }
         }
+        Command::LayerStyle { index, new, .. } => {
+            if let Some(layer) = doc.layers.get_mut(*index) {
+                (layer.blend, layer.opacity) = *new;
+            }
+        }
         Command::Resize { new_size, .. } => {
             doc.resize(new_size.0, new_size.1);
         }
@@ -194,6 +199,11 @@ fn apply_inverse(cmd: &Command, doc: &mut Document) {
         Command::LayerRename { index, old, .. } => {
             if let Some(layer) = doc.layers.get_mut(*index) {
                 layer.name = old.clone();
+            }
+        }
+        Command::LayerStyle { index, old, .. } => {
+            if let Some(layer) = doc.layers.get_mut(*index) {
+                (layer.blend, layer.opacity) = *old;
             }
         }
         Command::Resize { old_size, old_layers, .. } => {

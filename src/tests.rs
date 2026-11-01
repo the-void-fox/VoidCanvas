@@ -452,6 +452,22 @@ mod ui {
     }
 
     #[test]
+    fn the_layers_panel_sets_the_blend_mode_in_one_undo_step() {
+        let mut harness = harness();
+        harness.get_by_value("Normal").click();
+        harness.step();
+        // A popup item takes a click once the pointer has rested on it for a frame, as a real one does.
+        harness.get_by_label("Overlay").hover();
+        harness.step();
+        harness.get_by_label("Overlay").click();
+        harness.step();
+        harness.step();
+        let app = harness.state();
+        assert_eq!(app.doc.active_layer().blend, crate::document::Blend::Overlay);
+        assert_eq!(app.history.labels().0, vec!["Blend Mode"]);
+    }
+
+    #[test]
     fn select_all_and_bracket_keys() {
         let mut harness = harness();
         harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
@@ -1531,6 +1547,8 @@ mod file_format {
             }
         }
         doc.layers[0].visible = false;
+        doc.layers[0].blend = crate::document::Blend::Overlay;
+        doc.layers[layers - 1].blend = crate::document::Blend::Combine;
         doc.layers[layers - 1].locked = true;
         doc.layers[layers - 1].opacity = 0.37;
         doc.durations = (0..frames).map(|f| [100, 100, 40, 2500][f % 4]).collect();
@@ -1615,12 +1633,112 @@ mod file_format {
     }
 
     #[test]
+    fn format_2_files_still_open() {
+        let bytes = std::fs::read("examples/demo.vc").unwrap();
+        assert_eq!(bytes[8], 2, "the demo was saved by 2.0");
+        let doc = parse_document(&bytes).unwrap();
+        assert!(doc.layers.iter().all(|l| l.blend == crate::document::Blend::Normal));
+    }
+
+    #[test]
     fn json_files_from_before_still_open() {
         let mut doc = Document::new(3, 2);
         doc.layers[0].set(1, 1, Cell::new('J', Color::WHITE, Color::TRANSPARENT));
         let json = serde_json::to_vec_pretty(&doc).unwrap();
         let loaded = parse_document(&json).unwrap();
         assert!(codec::same_content(&doc, &loaded));
+    }
+}
+
+mod blending {
+    use super::{NONE, blue, glyph, red};
+    use crate::document::blend::combine;
+    use crate::document::{Blend, Cell, Color, Document, Layer, Stack};
+    use crate::history::{Command, History};
+
+    #[test]
+    fn glyphs_combine_into_real_characters() {
+        let pairs = [
+            ('│', '─', Some('┼')), ('┌', '┘', Some('┼')), ('│', '═', Some('╪')), ('╴', '╶', Some('─')),
+            ('⠁', '⠈', Some('⠉')), ('▀', '▄', Some('█')), ('▌', '▐', Some('█')), ('▘', '▗', Some('▚')),
+            ('🬀', '🬁', Some('🬂')), ('🬐', '🬃', Some('▌')), ('-', '|', Some('+')), ('\\', '/', Some('X')),
+            ('#', '#', Some('#')), ('▀', '🬭', None), ('a', 'b', None), ('│', '⠁', None),
+        ];
+        for (below, top, want) in pairs {
+            assert_eq!(combine(below, top), want, "{below} + {top}");
+        }
+    }
+
+    fn stack(cells: &[(&Cell, Blend, f32)]) -> Stack {
+        let mut stack = Stack::new();
+        for (cell, blend, opacity) in cells {
+            stack.push(cell, *blend, *opacity);
+        }
+        stack
+    }
+
+    #[test]
+    fn blend_modes_decide_what_a_glyph_does_to_the_one_below() {
+        let (line, cross) = (Cell::new('│', red(), NONE), Cell::new('─', blue(), NONE));
+        let normal = stack(&[(&line, Blend::Normal, 1.0), (&cross, Blend::Normal, 1.0)]);
+        assert_eq!(normal.glyphs, vec![('─', blue())]);
+        let combined = stack(&[(&line, Blend::Normal, 1.0), (&cross, Blend::Combine, 1.0)]);
+        assert_eq!(combined.glyphs, vec![('┼', blue())], "one real glyph, in the top colour");
+        let letter = Cell::new('a', blue(), NONE);
+        let fallback = stack(&[(&line, Blend::Normal, 1.0), (&letter, Blend::Combine, 1.0)]);
+        assert_eq!(fallback.glyphs, vec![('a', blue())], "nothing to combine: it replaces");
+        let overlaid = stack(&[(&line, Blend::Normal, 1.0), (&letter, Blend::Overlay, 1.0)]);
+        assert_eq!(overlaid.glyphs, vec![('│', red()), ('a', blue())]);
+        assert_eq!(overlaid.top().ch, 'a', "text keeps the top glyph");
+    }
+
+    #[test]
+    fn opacity_fades_and_backgrounds_blend() {
+        let below = Cell::new(' ', Color::WHITE, Color::new(0, 0, 255, 255));
+        let above = Cell::new('x', Color::WHITE, Color::new(255, 0, 0, 255));
+        let half = stack(&[(&below, Blend::Normal, 1.0), (&above, Blend::Normal, 0.5)]);
+        assert_eq!(half.bg, Color::new(128, 0, 127, 255));
+        assert_eq!(half.glyphs, vec![('x', Color::new(255, 255, 255, 128))]);
+        let none = stack(&[(&glyph('o'), Blend::Normal, 1.0), (&above, Blend::Normal, 0.0)]);
+        assert_eq!(none.top(), glyph('o'), "a layer at 0 % changes nothing");
+        // A see-through background lets the one below show through.
+        let tint = Cell::new(' ', Color::WHITE, Color::new(255, 0, 0, 128));
+        assert_eq!(stack(&[(&below, Blend::Normal, 1.0), (&tint, Blend::Normal, 1.0)]).bg, Color::new(128, 0, 127, 255));
+    }
+
+    fn two_layers(blend: Blend) -> Document {
+        let mut doc = Document::new(2, 1);
+        doc.layers[0].set(0, 0, glyph('│'));
+        doc.layers[0].set(1, 0, glyph('o'));
+        let mut top = Layer::new(2, 1, "Top");
+        top.blend = blend;
+        top.set(0, 0, glyph('─'));
+        top.set(1, 0, glyph('x'));
+        doc.insert_layer(1, top);
+        doc
+    }
+
+    #[test]
+    fn merging_down_bakes_the_blend_mode() {
+        for (blend, want, overlaid) in [(Blend::Normal, "─x", false), (Blend::Combine, "┼x", false), (Blend::Overlay, "─x", true)] {
+            let doc = two_layers(blend);
+            assert_eq!(doc.has_overlaid_glyphs(0), overlaid);
+            let merged = doc.merged_down(1);
+            let row: String = (0..2).map(|x| merged.get(x, 0).unwrap().ch).collect();
+            assert_eq!(row, want, "{blend:?}");
+        }
+        let doc = two_layers(Blend::Combine);
+        assert_eq!(crate::export::to_text(&doc, crate::export::whole(&doc)), "┼x", "combined glyphs are real text");
+    }
+
+    #[test]
+    fn style_changes_undo() {
+        let mut doc = two_layers(Blend::Normal);
+        let mut history = History::new(10);
+        history.execute(Command::LayerStyle { index: 1, old: (Blend::Normal, 1.0), new: (Blend::Overlay, 0.4) }, &mut doc);
+        assert_eq!((doc.layers[1].blend, doc.layers[1].opacity), (Blend::Overlay, 0.4));
+        history.undo(&mut doc);
+        assert_eq!((doc.layers[1].blend, doc.layers[1].opacity), (Blend::Normal, 1.0));
     }
 }
 

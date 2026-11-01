@@ -133,6 +133,8 @@ pub struct AsciiArtEditor {
     /// One entry per tab; the one in front is `None`, its document lives in the fields above.
     tabs: Vec<Option<tabs::Tab>>,
     pub(crate) playback: animation::Playback,
+    /// A layer's blend mode and opacity before the style edit in progress.
+    style_before: Option<(usize, crate::document::Blend, f32)>,
     /// The Script window, while open.
     pub(crate) script: Option<scripting::ScriptWindow>,
     active_tab: usize,
@@ -189,6 +191,7 @@ impl Default for AsciiArtEditor {
             tabs:           vec![None],
             playback:       animation::Playback::default(),
             script:         None,
+            style_before:   None,
             active_tab:     0,
             last_dir:       None,
             system_dialog_failed: cfg!(test),
@@ -640,6 +643,14 @@ impl AsciiArtEditor {
         ctx.copy_text(text);
         let what = if self.tools.selection.selection.is_some() { "selection" } else { "picture" };
         self.show_status(format!("Copied the {what} as {}", if ansi { "ANSI" } else { "text" }));
+        self.warn_if_overlaid();
+    }
+
+    /// After writing text: say so if overlaid glyphs had to give way to the top one.
+    pub(super) fn warn_if_overlaid(&mut self) {
+        if self.doc.has_overlaid_glyphs(self.doc.frame) {
+            self.show_warning("Text holds one glyph per cell: where an Overlay layer draws over another glyph, only the top one was kept");
+        }
     }
 
     fn cut(&mut self, ctx: &egui::Context) {
@@ -756,6 +767,9 @@ impl AsciiArtEditor {
                     self.show_status("Can't merge a locked layer");
                     return;
                 }
+                if self.doc.layers[active].blend == crate::document::Blend::Overlay {
+                    self.show_warning("A cell holds one glyph: where this Overlay layer drew over another glyph, only its own was kept");
+                }
                 Command::LayerMergeDown {
                     upper:  active,
                     layer:  self.doc.active_layer().clone(),
@@ -779,6 +793,22 @@ impl AsciiArtEditor {
                 let name = name.trim().to_string();
                 if i >= n || name.is_empty() || name == self.doc.layers[i].name { return; }
                 Command::LayerRename { index: i, old: self.doc.layers[i].name.clone(), new: name }
+            }
+            LayerAction::Style { index, blend, opacity, done } => {
+                // Applied live; the whole edit becomes one undo step when it's done.
+                let Some(layer) = self.doc.layers.get_mut(index) else { return };
+                let before = *self.style_before.get_or_insert((index, layer.blend, layer.opacity));
+                (layer.blend, layer.opacity) = (blend, opacity.clamp(0.0, 1.0));
+                self.doc.modified = true;
+                if done {
+                    self.style_before = None;
+                    let (old, new) = ((before.1, before.2), (layer.blend, layer.opacity));
+                    if before.0 == index && old != new {
+                        let label = if old.0 != new.0 { "Blend Mode" } else { "Layer Opacity" };
+                        self.history.push_as(Command::LayerStyle { index, old, new }, label);
+                    }
+                }
+                return;
             }
         };
         self.history.execute(cmd, &mut self.doc);
@@ -838,6 +868,12 @@ impl AsciiArtEditor {
     fn show_status(&mut self, msg: impl Into<String>) {
         self.status_msg = msg.into();
         self.status_timer = 3.0;
+    }
+
+    /// A status message that stays longer.
+    fn show_warning(&mut self, msg: &str) {
+        self.status_msg = format!("{}  {msg}", crate::icons::ALERT);
+        self.status_timer = 8.0;
     }
 
     // ── Unsaved changes ──────────────────────────────────────────────────────

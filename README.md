@@ -16,7 +16,7 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 | **Banners** | Big FIGlet letters (Standard, Small, Slant, Big, Shadow, Mini, Banner) |
 | **Paint channels** | Glyph / Fore / Back toggles: paint, fill, erase or pick only the character, only the colour, or only the background |
 | **Selection** | Move by dragging or with the arrow keys, glyph-aware Flip / Rotate (`/` ↔ `\`, `┌` ↔ `┐`, `▌` ↔ `▐`, …) |
-| **Layers** | Add / Remove / Duplicate / Merge Down / Reorder / Rename / Lock / Hide |
+| **Layers** | Add / Remove / Duplicate / Merge Down / Reorder / Rename / Lock / Hide; opacity and **blend modes**: *Normal* (a glyph replaces the one below), *Combine* (glyphs join into one real character where Unicode has it: `│`+`─` = `┼`, braille dots, quarter / sixth blocks, `/`+`\` = `X` — still plain text), *Overlay* (glyphs drawn over each other; text export keeps the top one and says so) |
 | **History** | 100-step Undo / Redo for everything, with a History panel to jump to any step |
 | **Glyphs** | 21 sets (Lines, Box, Blocks, Braille, Sextants, Math, Greek, Arrows, Nerd icons, …), recent glyphs; search by name, code point (`U+2588`) or any typed character |
 | **Colors** | Primary & secondary foreground / background slots, live RGBA picker, hex input, recent colours, VGA / xterm 256 / PICO-8 / Game Boy palettes; Replace (Ctrl+H) recolours or swaps glyphs across a layer |
@@ -128,7 +128,7 @@ cargo build --release
 
 ## File Format
 
-`.vc` files (format 2) are compressed with a coder made for character art
+`.vc` files (format 3) are compressed with a coder made for character art
 ([`src/document/codec.rs`](src/document/codec.rs)):
 
 - **Prediction.** Every cell is first guessed: the same cell in the previous frame, then the
@@ -146,13 +146,13 @@ cargo build --release
 - **Safety.** A CRC-32 guards every file; damaged or cut-short files are reported, never
   half-loaded. Each save is decoded again and compared before it is written.
 
-| Document | JSON (format 1) | `xz -9e` of the JSON | `.vc` format 2 |
+| Document | JSON (format 1) | `xz -9e` of the JSON | `.vc` |
 |---|---|---|---|
 | `examples/demo.vc` (72×28, 3 layers) | 1.6 MB | 2.3 KB | **818 B** |
 | 200×80 animation, 16 frames | 41.6 MB | 8.0 KB | **505 B** |
 | Photo-like picture, 160×45 half blocks | 629 KB | 15.6 KB | **11.5 KB** |
 
-Older JSON `.vc` files still open; saving them writes the new format.
+Older files still open: JSON ones (format 1, before 2.0) and format 2 (2.0, before blend modes); saving writes format 3.
 
 ---
 
@@ -197,6 +197,7 @@ src/
 │   ├── cell.rs          Cell & Color types, compositing
 │   ├── layer.rs         Layer (a grid of cells per animation frame)
 │   ├── document.rs      Document (layer stack, frames, compositing)
+│   ├── blend.rs         Blend modes, glyph stacks, combining characters
 │   └── codec.rs         The compressed .vc format
 ├── history/
 │   ├── commands.rs      Command enum

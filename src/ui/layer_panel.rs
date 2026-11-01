@@ -2,7 +2,7 @@ use egui::*;
 use crate::icons;
 use crate::theme;
 use crate::ui::widgets::icon_button;
-use crate::document::Document;
+use crate::document::{Blend, Document};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayerAction {
@@ -17,6 +17,8 @@ pub enum LayerAction {
     ToggleLock(usize),
     Rename(usize, String),
     Reorder(usize, usize),
+    /// Blend mode and opacity of a layer, changed live; `done` once the edit is over (one undo step).
+    Style { index: usize, blend: Blend, opacity: f32, done: bool },
 }
 
 #[derive(Default)]
@@ -53,6 +55,36 @@ impl LayerPanel {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         button(ui, n > 1, icons::DELETE, "Delete layer", LayerAction::Remove);
                     });
+                });
+            });
+
+        // Like Photoshop: the active layer's blend mode and opacity above the list.
+        egui::Panel::top("layer_style")
+            .frame(Frame::NONE.inner_margin(Margin { left: 0, right: 0, top: 0, bottom: 6 }))
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let layer = &doc.layers[active];
+                    let (mut blend, mut percent) = (layer.blend, layer.opacity * 100.0);
+                    let mut done = false;
+                    ComboBox::from_id_salt("layer_blend")
+                        .selected_text(blend.name())
+                        .width(92.0)
+                        .show_ui(ui, |ui| {
+                            for mode in Blend::ALL {
+                                done |= ui.selectable_value(&mut blend, mode, mode.name()).on_hover_text(mode.describe()).clicked();
+                            }
+                        })
+                        .response
+                        .on_hover_text(blend.describe());
+                    ui.add_space(4.0);
+                    ui.spacing_mut().slider_width = (ui.available_width() - 56.0).max(40.0);
+                    let slider = ui.add(Slider::new(&mut percent, 0.0..=100.0).suffix("%").fixed_decimals(0)).on_hover_text("Opacity");
+                    done |= slider.drag_stopped() || (slider.changed() && !slider.dragged());
+                    let opacity = percent / 100.0;
+                    if blend != layer.blend || opacity != layer.opacity || done {
+                        action = Some(LayerAction::Style { index: active, blend, opacity, done });
+                    }
                 });
             });
 
@@ -138,6 +170,13 @@ impl LayerPanel {
                             theme::TEXT_DIM
                         };
                         child_ui.add(Label::new(RichText::new(&layer.name).color(name_color)).selectable(false).truncate());
+                        // A reminder of a style other than the usual.
+                        let mut style = Vec::new();
+                        if layer.blend != Blend::Normal { style.push(layer.blend.name().to_owned()); }
+                        if layer.opacity < 1.0 { style.push(format!("{:.0}%", layer.opacity * 100.0)); }
+                        if !style.is_empty() {
+                            child_ui.label(RichText::new(style.join(" · ")).small().color(theme::TEXT_FAINT));
+                        }
                     }
 
                     if row_resp.hovered() {

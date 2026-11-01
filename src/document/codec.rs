@@ -1,4 +1,4 @@
-//! The `.vc` file format, version 2: every cell of every layer and frame, compressed.
+//! The `.vc` file format, version 3: every cell of every layer and frame, compressed.
 //!
 //! Layout: `VOIDCANV`, the format version (one byte), the coded body, and a CRC-32 of all of
 //! that (4 bytes, little-endian). Older files are JSON and still load (see `file_io`).
@@ -22,10 +22,11 @@
 
 use std::collections::HashMap;
 
-use super::{Cell, Color, Document, Layer};
+use super::{Blend, Cell, Color, Document, Layer};
 
 pub const MAGIC: &[u8; 8] = b"VOIDCANV";
-const VERSION: u8 = 2;
+/// 3 added layer blend modes; 2 files still load.
+const VERSION: u8 = 3;
 
 /// Sizes a file may declare; anything bigger is damaged (or would not fit in memory).
 const MAX_SIDE: usize = 4096;
@@ -247,6 +248,7 @@ struct Models {
     number: Number,
     flag: u16,
     byte: Tree,
+    blend: Tree,
     same_duration: u16,
     channel: [Tree; 4],
     /// "The cell is candidate k": [kind][what the cell before matched][left = up].
@@ -318,6 +320,7 @@ impl Models {
             number: Number::new(),
             flag: EVEN,
             byte: Tree::new(8),
+            blend: Tree::new(2),
             same_duration: EVEN,
             channel: std::array::from_fn(|_| Tree::new(8)),
             is: [[[EVEN; 2]; TOKENS]; KINDS],
@@ -483,6 +486,8 @@ pub(crate) fn encode_with(doc: &Document, predicted: bool) -> Vec<u8> {
         if !opaque {
             e.direct(layer.opacity.to_bits(), 32);
         }
+        let blend = Blend::ALL.iter().position(|b| *b == layer.blend).unwrap_or(0);
+        m.blend.encode(&mut e, blend as u32);
     }
     m.number.encode(&mut e, glyphs.len() as u32);
     let mut previous = 0;
@@ -574,7 +579,7 @@ pub fn decode(bytes: &[u8]) -> Result<Document, String> {
         return Err("not a Void Canvas file".into());
     }
     let version = bytes[MAGIC.len()];
-    if version != VERSION {
+    if !(2..=VERSION).contains(&version) {
         return Err(format!("the file was made by a newer Void Canvas (format {version})"));
     }
     let (data, crc) = bytes.split_at(bytes.len() - 4);
@@ -614,7 +619,12 @@ pub fn decode(bytes: &[u8]) -> Result<Document, String> {
         let visible = d.bit(&mut m.flag);
         let locked = d.bit(&mut m.flag);
         let opacity = if d.bit(&mut m.flag) { 1.0 } else { f32::from_bits(d.direct(32)) };
-        info.push((name, visible, locked, opacity));
+        let blend = if version >= 3 {
+            *Blend::ALL.get(m.blend.decode(&mut d) as usize).ok_or_else(|| damaged("a blend mode"))?
+        } else {
+            Blend::Normal
+        };
+        info.push((name, visible, locked, opacity, blend));
     }
     // Every glyph and colour in the tables is used by some cell.
     let count = number(&mut d, &mut m, total)?;
@@ -708,7 +718,7 @@ pub fn decode(bytes: &[u8]) -> Result<Document, String> {
     let layers = all
         .into_iter()
         .zip(info)
-        .map(|(cells, (name, visible, locked, opacity))| Layer::from_frames(name, w, h, visible, locked, opacity, cells, frame))
+        .map(|(cells, (name, visible, locked, opacity, blend))| Layer::from_frames(name, w, h, visible, locked, opacity, blend, cells, frame))
         .collect();
     let mut doc = Document::new(w, h);
     doc.layers = layers;

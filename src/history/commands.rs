@@ -1,4 +1,4 @@
-use crate::document::{Changes, FrameData, Layer};
+use crate::document::{Blend, Changes, FrameData, Layer};
 
 #[derive(Clone, Debug)]
 pub enum Command {
@@ -32,6 +32,12 @@ pub enum Command {
         index: usize,
         old: String,
         new: String,
+    },
+    /// Blend mode and opacity.
+    LayerStyle {
+        index: usize,
+        old: (Blend, f32),
+        new: (Blend, f32),
     },
     Resize {
         old_size: (usize, usize),
@@ -69,6 +75,7 @@ impl Command {
             Command::LayerMove { .. }      => "Move Layer",
             Command::LayerMergeDown { .. } => "Merge Down",
             Command::LayerRename { .. }    => "Rename Layer",
+            Command::LayerStyle { .. }     => "Layer Style",
             Command::Resize { .. }         => "Resize Canvas",
             Command::FrameAdd { .. }       => "New Frame",
             Command::FrameRemove { .. }    => "Delete Frame",

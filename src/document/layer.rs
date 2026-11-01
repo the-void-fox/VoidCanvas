@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use super::{Changes, cell::Cell};
+use super::{Blend, Changes, cell::Cell};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Layer {
@@ -9,6 +9,9 @@ pub struct Layer {
     pub visible: bool,
     pub locked: bool,
     pub opacity: f32,
+    /// How its glyphs meet the glyphs below.
+    #[serde(default)]
+    pub blend: Blend,
     /// The cells of the frame being shown.
     cells: Vec<Cell>,
     /// In an animation, the cells of every frame by frame number; the shown frame's entry is
@@ -26,6 +29,7 @@ impl Layer {
             visible: true,
             locked: false,
             opacity: 1.0,
+            blend: Blend::Normal,
             cells: vec![Cell::default(); width * height],
             frames: Vec::new(),
         }
@@ -40,6 +44,7 @@ impl Layer {
         visible: bool,
         locked: bool,
         opacity: f32,
+        blend: Blend,
         mut frames: Vec<Vec<Cell>>,
         shown: usize,
     ) -> Self {
@@ -47,7 +52,7 @@ impl Layer {
         if frames.len() == 1 {
             frames.clear();
         }
-        Self { name, width, height, visible, locked, opacity, cells, frames }
+        Self { name, width, height, visible, locked, opacity, blend, cells, frames }
     }
 
     fn blank(&self) -> Vec<Cell> {

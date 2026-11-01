@@ -110,7 +110,10 @@ impl AsciiArtEditor {
         };
         if let Some((kind, contents)) = text_export(self) {
             match std::fs::write(&path, contents) {
-                Ok(()) => self.show_status(format!("Exported {kind}: {}", path.display())),
+                Ok(()) => {
+                    self.show_status(format!("Exported {kind}: {}", path.display()));
+                    self.warn_if_overlaid();
+                }
                 Err(e) => self.show_status(format!("Export failed: {e}")),
             }
             return;

@@ -55,38 +55,40 @@ pub fn render_frame(doc: &Document, frame: usize, transparent: bool) -> Result<R
 
     for cy in 0..doc.height {
         for cx in 0..doc.width {
-            let cell = doc.composite_in(frame, cx, cy);
+            let stack = doc.stack_in(frame, cx, cy);
             let (px, py) = (cx as u32 * cell_w, cy as u32 * cell_h);
 
-            if !cell.bg.is_transparent() {
+            if !stack.bg.is_transparent() {
                 for y in py..py + cell_h {
                     for x in px..px + cell_w {
-                        blend_over(img.get_pixel_mut(x, y), &cell.bg, 1.0);
+                        blend_over(img.get_pixel_mut(x, y), &stack.bg, 1.0);
                     }
                 }
             }
 
-            if cell.ch == ' ' { continue; }
-            // Box-drawing, block and braille glyphs: the same shapes as on the canvas.
-            let (x, y) = ((px as f32, (px + cell_w) as f32), (py as f32, (py + cell_h) as f32));
-            if glyph_render::draw_on(&mut Pixels(&mut img), cell.ch, x, y, cell.fg.to_egui(), strokes) {
-                continue;
-            }
-            let glyph_id = font.glyph_id(cell.ch);
-            let left = px as f32 + (CELL_W - scaled.h_advance(glyph_id)) / 2.0;
-            let glyph = glyph_id.with_scale_and_position(
-                scale,
-                ab_glyph::point(left, py as f32 + scaled.ascent()),
-            );
-            let Some(outlined) = font.outline_glyph(glyph) else { continue };
-            let bounds = outlined.px_bounds();
-            outlined.draw(|gx, gy, coverage| {
-                let x = bounds.min.x as i32 + gx as i32;
-                let y = bounds.min.y as i32 + gy as i32;
-                if x >= 0 && y >= 0 && (x as u32) < img_w && (y as u32) < img_h {
-                    blend_over(img.get_pixel_mut(x as u32, y as u32), &cell.fg, coverage);
+            // Every glyph, bottom first (more than one where a layer overlays).
+            for (ch, fg) in &stack.glyphs {
+                // Box-drawing, block and braille glyphs: the same shapes as on the canvas.
+                let (x, y) = ((px as f32, (px + cell_w) as f32), (py as f32, (py + cell_h) as f32));
+                if glyph_render::draw_on(&mut Pixels(&mut img), *ch, x, y, fg.to_egui(), strokes) {
+                    continue;
                 }
-            });
+                let glyph_id = font.glyph_id(*ch);
+                let left = px as f32 + (CELL_W - scaled.h_advance(glyph_id)) / 2.0;
+                let glyph = glyph_id.with_scale_and_position(
+                    scale,
+                    ab_glyph::point(left, py as f32 + scaled.ascent()),
+                );
+                let Some(outlined) = font.outline_glyph(glyph) else { continue };
+                let bounds = outlined.px_bounds();
+                outlined.draw(|gx, gy, coverage| {
+                    let x = bounds.min.x as i32 + gx as i32;
+                    let y = bounds.min.y as i32 + gy as i32;
+                    if x >= 0 && y >= 0 && (x as u32) < img_w && (y as u32) < img_h {
+                        blend_over(img.get_pixel_mut(x as u32, y as u32), fg, coverage);
+                    }
+                });
+            }
         }
     }
 

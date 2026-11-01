@@ -1,5 +1,5 @@
 use egui::*;
-use crate::document::Document;
+use crate::document::{Document, Stack};
 use crate::theme;
 use crate::tools::*;
 use crate::tools::gradient::GradientSettings;
@@ -230,10 +230,10 @@ pub fn draw_canvas(
     let strokes = glyph_render::Strokes::new(cs.x, ppp);
     for y in y0..y1 {
         for x in x0..x1 {
-            let cell = doc.composite_cell(x, y);
-            if cell.is_empty() { continue; }
+            let stack = doc.stack_in(doc.frame, x, y);
+            if stack.is_empty() { continue; }
             let rect = snap(state.cell_rect(x, y, origin));
-            draw_cell(&painter, rect, cell.ch, cell.fg.to_egui(), cell.bg.to_egui(), &font_id, strokes);
+            draw_stack(&painter, rect, &stack, None, &font_id, strokes);
         }
     }
 
@@ -267,11 +267,9 @@ pub fn draw_canvas(
         let visible = |&&(px, py, _): &&(usize, usize, _)| (x0..x1).contains(&px) && (y0..y1).contains(&py);
         for (px, py, cell) in preview.iter().filter(visible) {
             // Show the result as it will look, with the other layers.
-            let cell = doc.composite_with(*px, *py, cell);
+            let stack = doc.stack_with(*px, *py, cell);
             let rect = snap(state.cell_rect(*px, *py, origin));
-            let bg = Color32::from_rgba_unmultiplied(cell.bg.r, cell.bg.g, cell.bg.b, cell.bg.a / 2);
-            let fg = Color32::from_rgba_unmultiplied(cell.fg.r, cell.fg.g, cell.fg.b, 180);
-            draw_cell(&painter, rect, cell.ch, fg, bg, &font_id, strokes);
+            draw_stack(&painter, rect, &stack, Some((128, 180)), &font_id, strokes);
         }
     }
 
@@ -400,6 +398,22 @@ pub fn draw_canvas(
     }
 
     events
+}
+
+/// A composited cell: its background, then each glyph, bottom first. `dim` caps the alpha of the
+/// background and of the glyphs (for previews).
+pub(crate) fn draw_stack(painter: &Painter, rect: Rect, stack: &Stack, dim: Option<(u8, u8)>, font_id: &FontId, strokes: glyph_render::Strokes) {
+    let color = |c: &crate::document::Color, cap: Option<u8>| {
+        Color32::from_rgba_unmultiplied(c.r, c.g, c.b, cap.map_or(c.a, |cap| c.a.min(cap)))
+    };
+    let mut bg = color(&stack.bg, dim.map(|d| d.0));
+    for (ch, fg) in &stack.glyphs {
+        draw_cell(painter, rect, *ch, color(fg, dim.map(|d| d.1)), bg, font_id, strokes);
+        bg = Color32::TRANSPARENT;
+    }
+    if stack.glyphs.is_empty() && bg.a() > 0 {
+        painter.rect_filled(rect, 0.0, bg);
+    }
 }
 
 /// One cell: background, then the glyph (procedurally for box / block / braille characters).

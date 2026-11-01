@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use super::{cell::Cell, layer::Layer};
+use super::{Blend, Stack, cell::Cell, layer::Layer};
 
 /// How long a new animation frame shows, in milliseconds.
 pub const DEFAULT_FRAME_MS: u32 = 100;
@@ -205,42 +205,58 @@ impl Document {
         self.modified = true;
     }
 
-    /// The layer below `upper` with `upper` baked into it, in every frame.
+    /// The layer below `upper` with `upper` baked into it, in every frame, by its blend mode and
+    /// opacity. (Overlaid glyphs can't share one cell: the top one is kept.)
     pub fn merged_down(&self, upper: usize) -> Layer {
         let top = &self.layers[upper];
         let mut merged = self.layers[upper - 1].clone();
         for frame in 0..self.frame_count() {
             for (below, t) in merged.cells_in_mut(frame).iter_mut().zip(top.cells_in(frame)) {
-                *below = t.over(below);
+                let mut stack = Stack::from_cell(below);
+                stack.push(t, top.blend, top.opacity);
+                *below = stack.top();
             }
         }
         merged
     }
 
-    /// What is visible at (x, y) after stacking all visible layers.
+    /// What is visible at (x, y) as one cell: the top glyph over the blended backgrounds.
     pub fn composite_cell(&self, x: usize, y: usize) -> Cell {
         self.composite_in(self.frame, x, y)
     }
 
     /// Like [`Self::composite_cell`], in any frame.
     pub fn composite_in(&self, frame: usize, x: usize, y: usize) -> Cell {
-        if x >= self.width || y >= self.height { return Cell::empty(); }
+        self.stack_in(frame, x, y).top()
+    }
+
+    /// Everything visible at (x, y) in `frame`, overlaid glyphs included.
+    pub fn stack_in(&self, frame: usize, x: usize, y: usize) -> Stack {
+        let mut stack = Stack::new();
+        if x >= self.width || y >= self.height { return stack; }
         let i = y * self.width + x;
-        self.layers
-            .iter()
-            .filter(|l| l.visible)
-            .map(|l| &l.cells_in(frame)[i])
-            .fold(Cell::empty(), |below, top| top.over(&below))
+        for layer in self.layers.iter().filter(|l| l.visible) {
+            stack.push(&layer.cells_in(frame)[i], layer.blend, layer.opacity);
+        }
+        stack
     }
 
     /// What would be visible at (x, y) if the active layer's cell there were `cell` (previews).
-    pub fn composite_with(&self, x: usize, y: usize, cell: &Cell) -> Cell {
-        self.layers
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| l.visible)
-            .filter_map(|(i, l)| if i == self.active_layer { Some(cell) } else { l.get(x, y) })
-            .fold(Cell::empty(), |below, top| top.over(&below))
+    pub fn stack_with(&self, x: usize, y: usize, cell: &Cell) -> Stack {
+        let mut stack = Stack::new();
+        for (i, layer) in self.layers.iter().enumerate().filter(|(_, l)| l.visible) {
+            let own = if i == self.active_layer { Some(cell) } else { layer.get(x, y) };
+            if let Some(own) = own {
+                stack.push(own, layer.blend, layer.opacity);
+            }
+        }
+        stack
+    }
+
+    /// Does any cell of `frame` show glyphs over glyphs, which text can't hold?
+    pub fn has_overlaid_glyphs(&self, frame: usize) -> bool {
+        self.layers.iter().any(|l| l.visible && l.blend == Blend::Overlay)
+            && (0..self.height).any(|y| (0..self.width).any(|x| self.stack_in(frame, x, y).glyphs.len() > 1))
     }
 
     pub fn resize(&mut self, new_w: usize, new_h: usize) {
