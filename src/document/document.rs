@@ -35,6 +35,9 @@ pub struct Document {
     pub frame: usize,
     #[serde(skip)]
     pub modified: bool,
+    /// Changes whenever 3D layers' cells or places change, so background renders know they're late.
+    #[serde(skip)]
+    pub render_gen: u64,
     #[serde(skip)]
     pub file_path: Option<String>,
 }
@@ -49,6 +52,7 @@ impl Document {
             durations: vec![DEFAULT_FRAME_MS],
             frame: 0,
             modified: false,
+            render_gen: 0,
             file_path: None,
         }
     }
@@ -119,7 +123,7 @@ impl Document {
         self.durations.insert(index, data.duration);
         self.show_frame(index);
         self.modified = true;
-        self.render_3d(None);
+        self.invalidate_3d();
     }
 
     /// Takes frame `index` out (another one must be left); a neighbour is shown if it was.
@@ -133,7 +137,7 @@ impl Document {
             self.frame -= 1;
         }
         self.modified = true;
-        self.render_3d(None);
+        self.invalidate_3d();
         FrameData { duration, cells }
     }
 
@@ -155,7 +159,7 @@ impl Document {
             self.frame
         };
         self.modified = true;
-        self.render_3d(None);
+        self.invalidate_3d();
     }
 
     /// Puts `layer` (taken from this document earlier, maybe while another frame was shown) at `index`.
@@ -163,17 +167,62 @@ impl Document {
         layer.sync_frames(self.frame_count(), self.frame);
         self.layers[index] = layer;
         self.modified = true;
-        self.render_3d(None);
+        self.invalidate_3d();
     }
 
-    /// Draws the 3D layers' scenes into their cells: in `frame`, or in every frame.
-    pub fn render_3d(&mut self, frame: Option<usize>) {
-        let (w, h, count) = (self.width, self.height, self.frame_count());
+    /// Every frame of every 3D layer is to be rendered again (by the editor, in the background,
+    /// or now with [`Self::render_3d_now`]); work under way for the old state is dropped.
+    pub fn invalidate_3d(&mut self) {
+        let count = self.frame_count();
+        for layer in self.layers.iter_mut().filter(|l| l.scene.is_some()) {
+            layer.stale.0 = (0..count).collect();
+        }
+        self.render_gen += 1;
+    }
+
+    /// Renders `frame` of the 3D layers now (the frame in view, while a scene is edited).
+    pub fn render_3d_frame(&mut self, frame: usize) {
+        let (w, h) = (self.width, self.height);
+        if frame >= self.frame_count() { return; }
         for layer in &mut self.layers {
             let Some(scene) = layer.scene.clone() else { continue };
-            for f in frame.map_or(0..count, |f| f..f + 1) {
-                *layer.cells_in_mut(f) = scene.render(w, h, f);
+            *layer.cells_in_mut(frame) = scene.render(w, h, frame);
+            layer.stale.0.remove(&frame);
+        }
+    }
+
+    /// Renders every frame that is still out of date, now.
+    pub fn render_3d_now(&mut self) {
+        let (w, h) = (self.width, self.height);
+        for layer in &mut self.layers {
+            let Some(scene) = layer.scene.clone() else {
+                layer.stale.0.clear();
+                continue;
+            };
+            for frame in std::mem::take(&mut layer.stale.0) {
+                *layer.cells_in_mut(frame) = scene.render(w, h, frame);
             }
+        }
+    }
+
+    /// The (layer, frame) pairs still to render, the frame in view first.
+    pub fn stale_3d(&self) -> Vec<(usize, usize)> {
+        let mut work: Vec<(usize, usize)> = self
+            .layers
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.scene.is_some())
+            .flat_map(|(i, l)| l.stale.0.iter().map(move |&f| (i, f)))
+            .collect();
+        work.sort_by_key(|&(l, f)| (f != self.frame, f, l));
+        work
+    }
+
+    /// Cells rendered in the background for `frame` of `layer`, if it still wants them.
+    pub fn finish_3d(&mut self, layer: usize, frame: usize, cells: Vec<Cell>) {
+        let Some(l) = self.layers.get_mut(layer) else { return };
+        if l.scene.is_some() && cells.len() == self.width * self.height && l.stale.0.remove(&frame) {
+            *l.cells_in_mut(frame) = cells;
         }
     }
 
@@ -197,15 +246,18 @@ impl Document {
         layer.sync_frames(self.frame_count(), self.frame);
         let index = index.min(self.layers.len());
         let solid = layer.scene.is_some();
+        self.render_gen += 1;
         self.layers.insert(index, layer);
         self.active_layer = index;
         self.modified = true;
         if solid {
-            self.render_3d(None);
+            self.invalidate_3d();
         }
     }
 
     pub fn take_layer(&mut self, index: usize) -> Layer {
+        // Layers below move: background renders for them would land on the wrong ones.
+        self.render_gen += 1;
         let layer = self.layers.remove(index);
         if self.active_layer >= self.layers.len() {
             self.active_layer = self.layers.len().saturating_sub(1);
@@ -218,6 +270,7 @@ impl Document {
         if from == to || from >= self.layers.len() || to >= self.layers.len() {
             return;
         }
+        self.render_gen += 1;
         let layer = self.layers.remove(from);
         self.layers.insert(to, layer);
         self.active_layer = to;
@@ -287,6 +340,6 @@ impl Document {
         self.width = new_w;
         self.height = new_h;
         self.modified = true;
-        self.render_3d(None);
+        self.invalidate_3d();
     }
 }

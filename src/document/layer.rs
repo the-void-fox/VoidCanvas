@@ -15,6 +15,9 @@ pub struct Layer {
     /// A 3D layer's scene: its cells are rendered from it, and tools leave them alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scene: Option<Box<Scene3D>>,
+    /// Frames whose cells haven't caught up with the scene yet (rendered in the background).
+    #[serde(skip)]
+    pub stale: Stale,
     /// The cells of the frame being shown.
     cells: Vec<Cell>,
     /// In an animation, the cells of every frame by frame number; the shown frame's entry is
@@ -34,6 +37,7 @@ impl Layer {
             opacity: 1.0,
             blend: Blend::Normal,
             scene: None,
+            stale: Stale::default(),
             cells: vec![Cell::default(); width * height],
             frames: Vec::new(),
         }
@@ -57,7 +61,7 @@ impl Layer {
         if frames.len() == 1 {
             frames.clear();
         }
-        Self { name, width, height, visible, locked, opacity, blend, scene, cells, frames }
+        Self { name, width, height, visible, locked, opacity, blend, scene, stale: Stale::default(), cells, frames }
     }
 
     fn blank(&self) -> Vec<Cell> {
@@ -220,5 +224,15 @@ impl Layer {
                     .collect()
             })
             .collect()
+    }
+}
+/// Frames of a 3D layer that still have to be rendered. It says when the cells will catch up,
+/// not what the layer is, so layers compare equal whatever it holds.
+#[derive(Clone, Debug, Default)]
+pub struct Stale(pub std::collections::BTreeSet<usize>);
+
+impl PartialEq for Stale {
+    fn eq(&self, _: &Self) -> bool {
+        true
     }
 }

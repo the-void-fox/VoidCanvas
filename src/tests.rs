@@ -718,8 +718,12 @@ mod ui {
 
         let mut harness = harness();
         harness.input_mut().dropped_files.push(egui::DroppedFile { path: Some(path.clone()), ..Default::default() });
-        harness.step();
-        harness.step();
+        // The picture is read on another thread; the dialog opens when it's in.
+        for _ in 0..400 {
+            harness.step();
+            if harness.state().image_import.is_some() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         harness.step();
         std::fs::remove_file(&path).unwrap();
         assert!(harness.state().image_import.is_some(), "the import dialog is open");
@@ -2100,6 +2104,8 @@ mod three_d {
         doc.insert_layer(1, layer);
         let data = doc.frame_data(0);
         doc.insert_frame(1, data);
+        assert_eq!(doc.stale_3d(), vec![(1, 1), (1, 0)], "both frames wait for a render, the one in view first");
+        doc.render_3d_now();
         let (a, b) = (doc.layers[1].cells_in(0).to_vec(), doc.layers[1].cells_in(1).to_vec());
         assert_ne!(a, b, "a new frame is rendered at its own angle, not copied");
         assert_eq!(b, doc.layers[1].scene.as_ref().unwrap().render(24, 12, 1));
@@ -2113,13 +2119,16 @@ mod three_d {
         let mut layer = Layer::new(24, 12, "3D");
         layer.scene = Some(Box::new(scene(Object3D::Sphere, Style3D::Blocks)));
         doc.insert_layer(1, layer);
+        doc.render_3d_now();
         let before = doc.layers[1].cells_in(0).to_vec();
         let mut history = History::new(10);
         let old = doc.layers[1].scene.clone();
         let new = Some(Box::new(scene(Object3D::Torus, Style3D::Blocks)));
         history.execute(Command::Scene { index: 1, old: old.clone(), new }, &mut doc);
+        doc.render_3d_now();
         assert_ne!(doc.layers[1].cells_in(0), before.as_slice());
         history.undo(&mut doc);
+        doc.render_3d_now();
         assert_eq!(doc.layers[1].cells_in(0), before.as_slice(), "the sphere is back");
 
         history.execute(Command::Scene { index: 1, old, new: None }, &mut doc);
@@ -2132,7 +2141,8 @@ mod three_d {
     fn merging_into_a_3d_layer_flattens_it_and_files_keep_scenes() {
         let mut doc = Document::new(24, 12);
         doc.layers[0].scene = Some(Box::new(scene(Object3D::Cone, Style3D::Braille)));
-        doc.render_3d(None);
+        doc.invalidate_3d();
+        doc.render_3d_now();
         let mut top = Layer::new(24, 12, "Top");
         top.set(0, 0, Cell::new('x', Color::WHITE, Color::TRANSPARENT));
         doc.insert_layer(1, top.clone());
@@ -2143,6 +2153,31 @@ mod three_d {
         let merged = doc.merged_down(1);
         assert!(merged.scene.is_none());
         assert_eq!(merged.get(0, 0).unwrap().ch, 'x');
+    }
+
+    #[test]
+    fn the_background_catches_3d_layers_up() {
+        let mut app = crate::app::AsciiArtEditor::default();
+        let ctx = eframe::egui::Context::default();
+        app.run(crate::app::commands::Action::New3D, &ctx);
+        app.turntable(8);
+        let layer = app.doc.active_layer;
+        assert_eq!(app.doc.stale_3d().len(), 8);
+        app.run_render_job(&ctx);
+        assert!(app.render_job.is_some(), "a render job starts");
+        // The scene changes while it runs: what it renders for the old one must not land.
+        app.doc.layers[layer].scene.as_mut().unwrap().turn[0] = 70.0;
+        app.doc.invalidate_3d();
+        for _ in 0..4000 {
+            app.run_render_job(&ctx);
+            if app.render_job.is_none() && app.doc.stale_3d().is_empty() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(app.doc.stale_3d().is_empty(), "everything caught up");
+        let scene = app.doc.layers[layer].scene.clone().unwrap();
+        for frame in 0..8 {
+            assert_eq!(app.doc.layers[layer].cells_in(frame), scene.render(app.doc.width, app.doc.height, frame).as_slice(), "frame {frame}");
+        }
     }
 
     #[test]

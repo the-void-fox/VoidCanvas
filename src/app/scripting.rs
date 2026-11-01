@@ -23,6 +23,8 @@ impl AsciiArtEditor {
 
     /// Runs the script in the window; everything it changes becomes one undo step.
     pub(crate) fn run_script(&mut self) {
+        if self.script.is_none() { return; }
+        self.finish_3d_now();
         let Some(window) = &self.script else { return };
         let code = window.code.clone();
         self.settings.set_script(&code);

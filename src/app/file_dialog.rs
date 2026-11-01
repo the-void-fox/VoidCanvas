@@ -38,7 +38,7 @@ impl FileAction {
     }
 
     /// Filter name and the extensions shown; the first one is added to new file names.
-    fn filter(&self) -> (&'static str, &'static [&'static str]) {
+    pub(super) fn filter(&self) -> (&'static str, &'static [&'static str]) {
         match self {
             FileAction::Open => ("Void Canvas or text", &["vc", "txt"]),
             FileAction::ImportImage => ("Images", IMAGE_EXTENSIONS),
@@ -51,7 +51,7 @@ impl FileAction {
         }
     }
 
-    fn saves(&self) -> bool {
+    pub(super) fn saves(&self) -> bool {
         !matches!(self, FileAction::Open | FileAction::ImportImage)
     }
 }
@@ -60,9 +60,16 @@ impl FileAction {
 const FAILED_DIALOG: Duration = Duration::from_millis(300);
 
 impl AsciiArtEditor {
-    /// Asks for a file for `action`, then carries it out.
+    /// Asks for a file for `action`, then carries it out. The system dialog runs on its own
+    /// thread (the window keeps answering); when it can't open, the built-in chooser does.
     pub(super) fn choose_file(&mut self, action: FileAction, ctx: &egui::Context) {
+        if self.pending_dialog.is_some() { return; }
         let suggested = self.suggested_file_name(&action);
+        if !self.system_dialog_failed && !cfg!(target_os = "macos") {
+            self.open_system_dialog(action, suggested);
+            return;
+        }
+        // macOS wants its dialogs on the main thread.
         if !self.system_dialog_failed {
             let started = Instant::now();
             let (kind, extensions) = action.filter();
@@ -77,6 +84,10 @@ impl AsciiArtEditor {
                 }
             }
         }
+        self.open_file_browser(action, suggested);
+    }
+
+    pub(super) fn open_file_browser(&mut self, action: FileAction, suggested: String) {
         let doc_dir = self.doc.file_path.as_deref().and_then(|p| Path::new(p).parent()).map(Path::to_path_buf);
         let dir = [self.last_dir.clone(), doc_dir, home_dir()]
             .into_iter()
@@ -92,7 +103,9 @@ impl AsciiArtEditor {
         format!("{stem}.{}", action.filter().1[0])
     }
 
-    fn finish_file_action(&mut self, action: FileAction, mut path: PathBuf, ctx: &egui::Context) {
+    pub(super) fn finish_file_action(&mut self, action: FileAction, mut path: PathBuf, ctx: &egui::Context) {
+        // Exports read the cells: 3D layers catch up first.
+        self.finish_3d_now();
         if let Some(dir) = path.parent() {
             self.last_dir = Some(dir.to_path_buf());
         }

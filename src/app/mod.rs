@@ -17,6 +17,7 @@ use crate::tools::{
     shade::ShadeTool,
 };
 mod animation;
+mod background;
 pub(crate) mod banner;
 mod chrome;
 pub(crate) mod commands;
@@ -140,6 +141,12 @@ pub struct AsciiArtEditor {
     brush_save_name: String,
     /// A layer's blend mode and opacity before the style edit in progress.
     style_before: Option<(usize, crate::document::Blend, f32)>,
+    /// 3D frames rendering in the background.
+    pub(crate) render_job: Option<background::RenderJob>,
+    /// The system file dialog, while it is open.
+    pending_dialog: Option<background::PendingDialog>,
+    /// A picture being read for Import Image.
+    loading_picture: Option<background::LoadingPicture>,
     /// The Library window, while open.
     pub(crate) library: Option<library::LibraryWindow>,
     /// The 3D window, while open.
@@ -202,6 +209,9 @@ impl Default for AsciiArtEditor {
             script:         None,
             three_d:        None,
             library:        None,
+            render_job:     None,
+            pending_dialog: None,
+            loading_picture: None,
             style_before:   None,
             brush_save_name: String::new(),
             active_tab:     0,
@@ -507,6 +517,7 @@ impl AsciiArtEditor {
             || self.image_import.is_some()
             || self.file_browser.is_some()
             || self.command_palette.is_some()
+            || self.waiting()
         {
             return;
         }
@@ -741,6 +752,7 @@ impl AsciiArtEditor {
 
     /// Copies the selection (or the whole picture) as plain text or ANSI-coloured text.
     fn copy_as(&mut self, ctx: &egui::Context, ansi: bool) {
+        self.finish_3d_now();
         let region = match self.tools.selection.selection {
             Some((x1, y1, x2, y2)) => (x1, y1, x2 + 1, y2 + 1),
             None => crate::export::whole(&self.doc),
@@ -881,6 +893,7 @@ impl AsciiArtEditor {
                     self.show_status("Can't merge a locked layer");
                     return;
                 }
+                self.finish_3d_now();
                 if self.doc.layers[active].blend == crate::document::Blend::Overlay {
                     self.show_warning("A cell holds one glyph: where this Overlay layer drew over another glyph, only its own was kept");
                 }
@@ -909,7 +922,7 @@ impl AsciiArtEditor {
                 Command::LayerRename { index: i, old: self.doc.layers[i].name.clone(), new: name }
             }
             LayerAction::New3D => {
-                self.add_3d_layer("3D Cube", crate::document::Scene3D::default());
+                self.add_3d_layer("3D", crate::document::Scene3D::default());
                 return;
             }
             LayerAction::Edit3D(i) => {
@@ -1109,6 +1122,9 @@ impl eframe::App for AsciiArtEditor {
         self.handle_close_request(&ctx);
         self.handle_dropped_files(&ctx);
         self.autosave(&ctx);
+        self.poll_file_dialog(&ctx);
+        self.poll_loading_picture(&ctx);
+        self.run_render_job(&ctx);
         self.handle_keyboard(&ctx);
         self.advance_playback(&ctx);
         self.new_doc_dialog(&ctx);
@@ -1122,6 +1138,7 @@ impl eframe::App for AsciiArtEditor {
         self.script_window(&ctx);
         self.three_d_window(&ctx);
         self.library_window(&ctx);
+        self.waiting_window(&ctx);
         self.file_browser_dialog(&ctx);
         self.command_palette_dialog(&ctx);
 

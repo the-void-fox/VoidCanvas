@@ -135,7 +135,7 @@ fn write_cells(doc: &mut Document, layer_idx: usize, changes: &Changes, new: boo
 fn set_scene(doc: &mut Document, index: usize, scene: &Option<Box<crate::document::Scene3D>>) {
     if let Some(layer) = doc.layers.get_mut(index) {
         layer.scene = scene.clone();
-        doc.render_3d(None);
+        doc.invalidate_3d();
     }
 }
 

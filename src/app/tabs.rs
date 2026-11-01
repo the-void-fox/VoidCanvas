@@ -61,6 +61,7 @@ impl AsciiArtEditor {
         self.canvas_state.onion_skin = onion;
         self.stop_playback();
         self.playback.selected.clear();
+        self.render_job = None;
         self.close_3d();
         self.tools.text.stop();
         self.layer_panel.rename_idx = None;
@@ -99,7 +100,11 @@ impl AsciiArtEditor {
     }
 
     /// Shows `doc` in a new tab next to the current one.
-    pub(crate) fn open_in_tab(&mut self, doc: Document) {
+    pub(crate) fn open_in_tab(&mut self, mut doc: Document) {
+        // A recovered autosave may hold 3D cells that never caught up: render them again.
+        if doc.layers.iter().any(|l| l.scene.is_some()) {
+            doc.invalidate_3d();
+        }
         let mut tab = Tab::new(doc);
         let replace = self.untouched();
         self.swap_front(&mut tab);

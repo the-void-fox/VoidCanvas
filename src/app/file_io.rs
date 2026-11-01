@@ -28,6 +28,7 @@ impl AsciiArtEditor {
 
     /// Writes next to the target first and then renames, so a failed write can't wipe the old file.
     pub(super) fn write_file(&mut self, path: String) -> bool {
+        self.finish_3d_now();
         let (data, compressed) = match document_bytes(&self.doc) {
             Ok(data) => data,
             Err(e) => {

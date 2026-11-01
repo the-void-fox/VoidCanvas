@@ -660,6 +660,12 @@ impl AsciiArtEditor {
                         if icon_button(ui, icons::ZOOM_OUT, 20.0, false, "Zoom out  (Ctrl -)").clicked() {
                             self.canvas_state.zoom_view_center(1.0 / 1.25);
                         }
+                        if let Some(job) = &self.render_job {
+                            vdivider(ui);
+                            let progress = job.done as f32 / job.total.max(1) as f32;
+                            ui.add(ProgressBar::new(progress).desired_width(110.0).desired_height(10.0).fill(theme::ACCENT_STRONG));
+                            ui.label(RichText::new(format!("Rendering 3D  {} / {}", job.done, job.total)).size(12.0).color(theme::TEXT_DIM));
+                        }
                         if self.status_timer > 0.0 {
                             vdivider(ui);
                             let warning = self.status_msg.starts_with(icons::ALERT);

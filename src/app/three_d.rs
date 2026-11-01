@@ -76,6 +76,7 @@ impl AsciiArtEditor {
         let index = self.doc.active_layer;
         let Some(old) = self.doc.active_layer().scene.clone() else { return };
         self.commit_3d();
+        self.finish_3d_now();
         self.history.execute_as(Command::Scene { index, old: Some(old), new: None }, "Rasterize 3D", &mut self.doc);
         self.three_d = None;
     }
@@ -94,7 +95,7 @@ impl AsciiArtEditor {
         if window.before.as_ref() != Some(&now) {
             let old = window.before.replace(now.clone());
             self.history.push_as(Command::Scene { index, old, new: Some(now) }, "Edit 3D");
-            self.doc.render_3d(None);
+            self.doc.invalidate_3d();
         }
     }
 
@@ -283,7 +284,7 @@ impl AsciiArtEditor {
         // Live: the frame in view follows every change; the rest catch up with the undo step.
         if scene != *current {
             self.doc.layers[index].scene = Some(Box::new(scene));
-            self.doc.render_3d(Some(self.doc.frame));
+            self.doc.render_3d_frame(self.doc.frame);
             self.doc.modified = true;
         }
         let busy = ctx.input(|i| i.pointer.any_down()) || ctx.text_edit_focused();

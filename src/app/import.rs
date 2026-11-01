@@ -1,7 +1,7 @@
 //! File → Import Image: converts a picture into a new layer, with a live preview.
 
 use eframe::egui::{self, *};
-use image::{RgbaImage, imageops};
+use image::RgbaImage;
 
 use super::AsciiArtEditor;
 use crate::convert::{ConvertMode, ConvertSettings, convert, height_for};
@@ -12,9 +12,6 @@ use crate::ui::{canvas::draw_cell, glyph_render};
 
 /// Image file extensions the importer reads.
 pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "bmp", "webp"];
-
-/// Larger pictures are scaled down once on load, so previews stay quick.
-const MAX_SOURCE_SIDE: u32 = 1024;
 
 pub struct ImageImport {
     name: String,
@@ -33,23 +30,8 @@ pub fn is_image(path: &std::path::Path) -> bool {
 }
 
 impl AsciiArtEditor {
-    /// Loads the picture and opens the import dialog.
-    pub fn start_image_import(&mut self, path: &std::path::Path) {
-        let image = match image::open(path) {
-            Ok(image) => image.to_rgba8(),
-            Err(e) => {
-                self.show_status(format!("Can't read image: {e}"));
-                return;
-            }
-        };
-        let (w, h) = image.dimensions();
-        let source = if w.max(h) > MAX_SOURCE_SIDE {
-            let scale = MAX_SOURCE_SIDE as f32 / w.max(h) as f32;
-            imageops::thumbnail(&image, (w as f32 * scale) as u32, (h as f32 * scale) as u32)
-        } else {
-            image
-        };
-        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    /// The Import Image dialog for a picture that has been read.
+    pub(super) fn open_image_import(&mut self, name: String, source: RgbaImage) {
         let settings = ConvertSettings { width: self.doc.width.min(80), ..ConvertSettings::default() };
         self.image_import = Some(ImageImport { name, source, settings, result: Vec::new(), converted: None, grow_canvas: false });
     }
