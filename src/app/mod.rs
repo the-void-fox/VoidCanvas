@@ -15,6 +15,7 @@ use crate::tools::{
     pixel::{PixelTool, halves},
     shade::{RAMPS, ShadeTool},
 };
+pub(crate) mod banner;
 mod chrome;
 mod dialogs;
 mod file_io;
@@ -110,6 +111,8 @@ pub struct AsciiArtEditor {
     pub(crate) image_import: Option<import::ImageImport>,
     /// The Replace window, while open.
     replace: Option<replace::ReplaceDialog>,
+    /// The Insert Banner window, while open.
+    pub(crate) banner: Option<banner::BannerDialog>,
     /// History version written by the last autosave.
     autosaved_version: u64,
     last_autosave: f64,
@@ -152,6 +155,7 @@ impl Default for AsciiArtEditor {
             recovery:       None,
             image_import:   None,
             replace:        None,
+            banner:         None,
             autosaved_version: 0,
             last_autosave:  0.0,
         }
@@ -867,6 +871,7 @@ impl eframe::App for AsciiArtEditor {
         self.recovery_modal(&ctx);
         self.image_import_dialog(&ctx);
         self.replace_dialog(&ctx);
+        self.banner_dialog(&ctx);
 
         if self.active_tool != ToolType::Text {
             self.tools.text.stop();

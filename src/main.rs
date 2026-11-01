@@ -6,6 +6,7 @@ mod convert;
 mod dev;
 mod document;
 mod export;
+mod figlet;
 mod glyphs;
 mod history;
 mod icons;

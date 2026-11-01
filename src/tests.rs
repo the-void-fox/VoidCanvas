@@ -527,6 +527,22 @@ mod ui {
     }
 
     #[test]
+    fn banner_is_inserted_as_a_movable_selection() {
+        let mut harness = harness();
+        harness.state_mut().banner = Some(crate::app::banner::BannerDialog { text: "Hi".into(), font: 0 });
+        harness.step();
+        harness.step();
+        harness.get_by_label("Insert").click();
+        harness.step();
+        let app = harness.state();
+        assert!(app.banner.is_none());
+        assert_eq!(app.active_tool, ToolType::Select);
+        assert_eq!(app.tools.selection.selection, Some((0, 0, 9, 4)));
+        assert_eq!(row(&harness, 0, 1, 10), "| | | |(_)");
+        assert_eq!(harness.state().history.labels().0, vec!["Banner"]);
+    }
+
+    #[test]
     fn recent_files_are_unique_newest_first_and_capped() {
         let mut settings = crate::app::storage::Settings::default();
         for i in 0..12 {
@@ -730,6 +746,37 @@ fn neighbouring_cells_share_their_edges_at_any_zoom() {
                 let b = snap_rect(state.cell_rect(x + 1, x + 1, origin), ppp);
                 assert_eq!((a.max.x, a.max.y), (b.min.x, b.min.y), "zoom {} cell {x}", state.zoom);
             }
+        }
+    }
+}
+
+mod banners {
+    use crate::figlet::fonts;
+
+    #[test]
+    fn every_bundled_font_loads() {
+        let names: Vec<&str> = fonts().iter().map(|f| f.name).collect();
+        assert_eq!(names, ["Standard", "Small", "Slant", "Big", "Shadow", "Mini", "Banner"]);
+    }
+
+    /// Expected rows come from  (fitted letters) with the same font files.
+    #[test]
+    fn matches_figlet() {
+        let cases: &[(&str, &str, &[&str])] = &[
+        ("Standard", "Hi", &[" _   _  _", "| | | |(_)", "| |_| || |", "|  _  || |", "|_| |_||_|"]),
+        ("Standard", "Void 42!", &["__     __      _      _   _  _   ____   _", "\\ \\   / /___  (_)  __| | | || | |___ \\ | |", " \\ \\ / // _ \\ | | / _` | | || |_  __) || |", "  \\ V /| (_) || || (_| | |__   _|/ __/ |_|", "   \\_/  \\___/ |_| \\__,_|    |_| |_____|(_)"]),
+        ("Slant", "Hi", &["    __  __ _", "   / / / /(_)", "  / /_/ // /", " / __  // /", "/_/ /_//_/"]),
+        ("Slant", "Void 42!", &[" _    __        _      __   __ __  ___    __", "| |  / /____   (_)____/ /  / // / |__ \\  / /", "| | / // __ \\ / // __  /  / // /_ __/ / / /", "| |/ // /_/ // // /_/ /  /__  __// __/ /_/", "|___/ \\____//_/ \\__,_/     /_/  /____/(_)"]),
+        ("Small", "Hi", &[" _  _  _", "| || |(_)", "| __ || |", "|_||_||_|"]),
+        ("Small", "Void 42!", &["__   __     _     _   _ _  ___  _", "\\ \\ / /___ (_) __| | | | ||_  )| |", " \\ V // _ \\| |/ _` | |_  _|/ / |_|", "  \\_/ \\___/|_|\\__,_|   |_|/___|(_)"]),
+        ("Big", "Hi", &[" _    _  _", "| |  | |(_)", "| |__| | _", "|  __  || |", "| |  | || |", "|_|  |_||_|"]),
+        ("Big", "Void 42!", &["__      __     _      _   _  _  ___   _", "\\ \\    / /    (_)    | | | || ||__ \\ | |", " \\ \\  / /___   _   __| | | || |_  ) || |", "  \\ \\/ // _ \\ | | / _` | |__   _|/ / | |", "   \\  /| (_) || || (_| |    | | / /_ |_|", "    \\/  \\___/ |_| \\__,_|    |_||____|(_)"]),
+        ("Mini", "Hi", &["", "|_| o", "| | |"]),
+        ("Mini", "Void 42!", &["                    _", "\\  / _  o  _|   |_|_ ) |", " \\/ (_) | (_|     | /_ o"]),
+        ];
+        for (font, text, expected) in cases {
+            let font = fonts().iter().find(|f| f.name == *font).unwrap();
+            assert_eq!(font.render(text), *expected, "{} {text:?}", font.name);
         }
     }
 }

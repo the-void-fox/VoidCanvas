@@ -87,6 +87,7 @@ impl AsciiArtEditor {
                         if ui.add_enabled(self.clipboard.is_some(), Button::new("Paste").shortcut_text("Ctrl+V")).clicked() {
                             self.paste(None);
                         }
+                        if ui.button("Insert Banner…").clicked() { self.open_banner(); }
                         ui.menu_button("Copy As", |ui| {
                             let what = if has_selection { "selection" } else { "whole picture" };
                             if ui.button("Plain Text").on_hover_text(format!("Copies the {what}")).clicked() {

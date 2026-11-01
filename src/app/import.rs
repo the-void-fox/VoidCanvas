@@ -153,8 +153,8 @@ impl AsciiArtEditor {
     }
 }
 
-/// The converted cells, scaled to fit `size`.
-fn preview(ui: &mut Ui, cells: &[Vec<Cell>], size: Vec2) {
+/// Cells drawn like on the canvas (no font ligatures), scaled to fit `size`.
+pub(super) fn preview(ui: &mut Ui, cells: &[Vec<Cell>], size: Vec2) {
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 6.0, theme::CANVAS_BG);
