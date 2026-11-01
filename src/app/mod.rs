@@ -18,6 +18,7 @@ use crate::tools::{
 pub(crate) mod banner;
 mod chrome;
 mod dialogs;
+pub(crate) mod file_dialog;
 mod file_io;
 mod import;
 pub(crate) mod replace;
@@ -29,6 +30,7 @@ use crate::ui::{
     layer_panel::{LayerAction, LayerPanel},
     panels::{ColorPanel, ToolOptions},
 };
+pub(crate) use file_dialog::FileAction;
 
 const APP_NAME: &str = "Void Canvas";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -58,7 +60,7 @@ pub enum DockTab {
 
 /// An action that would throw away unsaved work; it waits for the user's answer.
 #[derive(Clone, PartialEq)]
-enum PendingAction {
+pub(crate) enum PendingAction {
     New,
     Open,
     OpenPath(std::path::PathBuf),
@@ -113,6 +115,13 @@ pub struct AsciiArtEditor {
     replace: Option<replace::ReplaceDialog>,
     /// The Insert Banner window, while open.
     pub(crate) banner: Option<banner::BannerDialog>,
+    /// The built-in file chooser, while open.
+    pub(crate) file_browser: Option<file_dialog::FileBrowser>,
+    /// Folder of the last file chosen; the built-in chooser starts there.
+    pub(crate) last_dir: Option<std::path::PathBuf>,
+    /// The system file dialog didn't open once, so the built-in one is used from then on.
+    /// (Always in tests: they must never open a real dialog.)
+    pub(crate) system_dialog_failed: bool,
     /// History version written by the last autosave.
     autosaved_version: u64,
     last_autosave: f64,
@@ -156,6 +165,9 @@ impl Default for AsciiArtEditor {
             image_import:   None,
             replace:        None,
             banner:         None,
+            file_browser:   None,
+            last_dir:       None,
+            system_dialog_failed: cfg!(test),
             autosaved_version: 0,
             last_autosave:  0.0,
         }
@@ -428,6 +440,7 @@ impl AsciiArtEditor {
             || self.pending_action.is_some()
             || self.recovery.is_some()
             || self.image_import.is_some()
+            || self.file_browser.is_some()
         {
             return;
         }
@@ -486,7 +499,7 @@ impl AsciiArtEditor {
         }
         if new { self.request(PendingAction::New, ctx); }
         if open { self.request(PendingAction::Open, ctx); }
-        if save_as { self.save_as(); } else if save { self.save(); }
+        if save_as { self.choose_file(FileAction::SaveAs { then: None }, ctx); } else if save { self.save(ctx); }
         if zoom_in { self.canvas_state.zoom_view_center(1.25); }
         if zoom_out { self.canvas_state.zoom_view_center(1.0 / 1.25); }
         if fit { self.canvas_state.request_fit(); }
@@ -804,7 +817,7 @@ impl AsciiArtEditor {
                 self.new_height = self.doc.height;
                 self.show_new_dialog = true;
             }
-            PendingAction::Open => self.open(),
+            PendingAction::Open => self.choose_file(FileAction::Open, ctx),
             PendingAction::OpenPath(path) => self.open_path(&path),
             PendingAction::Quit => {
                 self.allow_close = true;
@@ -872,6 +885,7 @@ impl eframe::App for AsciiArtEditor {
         self.image_import_dialog(&ctx);
         self.replace_dialog(&ctx);
         self.banner_dialog(&ctx);
+        self.file_browser_dialog(&ctx);
 
         if self.active_tool != ToolType::Text {
             self.tools.text.stop();

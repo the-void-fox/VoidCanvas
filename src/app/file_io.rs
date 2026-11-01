@@ -1,80 +1,29 @@
 //! Saving, opening and exporting files.
 
-use super::{AsciiArtEditor, storage};
-use crate::export;
+use eframe::egui;
+
+use super::{AsciiArtEditor, PendingAction, file_dialog::FileAction, storage};
 use crate::document::{Color, Document};
 use crate::tools::selection::text_to_content;
 
 impl AsciiArtEditor {
-    /// Asks where to save `contents` as a `kind` file with extension `ext`.
-    fn export_string(&mut self, kind: &str, ext: &str, contents: String) {
-        let Some(mut path) = rfd::FileDialog::new().add_filter(kind, &[ext]).save_file() else { return };
-        if path.extension().is_none_or(|e| e != ext) {
-            path.set_extension(ext);
-        }
-        match std::fs::write(&path, contents) {
-            Ok(()) => self.show_status(format!("Exported {kind}: {}", path.display())),
-            Err(e) => self.show_status(format!("Export failed: {e}")),
-        }
+    /// Saves to the current file, or asks where to save it the first time.
+    pub(super) fn save(&mut self, ctx: &egui::Context) {
+        self.save_then(None, ctx);
     }
 
-    pub(super) fn export_text(&mut self) {
-        let text = export::to_text(&self.doc, export::whole(&self.doc));
-        self.export_string("Text", "txt", text);
-    }
-
-    pub(super) fn export_ansi(&mut self) {
-        let ansi = export::to_ansi(&self.doc, export::whole(&self.doc));
-        self.export_string("ANSI", "ans", ansi);
-    }
-
-    pub(super) fn export_html(&mut self) {
-        let html = export::to_html(&self.doc, &self.doc_name());
-        self.export_string("HTML", "html", html);
-    }
-
-    pub(super) fn export_png(&mut self, transparent: bool) {
-        let Some(mut path) = rfd::FileDialog::new()
-            .add_filter("PNG Image", &["png"])
-            .save_file()
-        else {
-            return;
-        };
-        if path.extension().is_none_or(|ext| ext != "png") {
-            path.set_extension("png");
-        }
-        let result = crate::export::render_png(&self.doc, transparent)
-            .and_then(|img| img.save(&path).map_err(|e| e.to_string()));
-        match result {
-            Ok(()) => self.show_status(format!("Exported PNG: {}", path.display())),
-            Err(e) => self.show_status(format!("PNG export failed: {e}")),
-        }
-    }
-
-    /// Saves to the current file (asks for a path the first time). Returns `true` on success.
-    pub(super) fn save(&mut self) -> bool {
+    /// Like [`Self::save`], then runs `then` once the document is safely saved.
+    pub(super) fn save_then(&mut self, then: Option<PendingAction>, ctx: &egui::Context) {
         match self.doc.file_path.clone() {
-            Some(path) => self.write_file(path),
-            None => self.save_as(),
+            Some(path) => {
+                if self.write_file(path)
+                    && let Some(then) = then
+                {
+                    self.perform(then, ctx);
+                }
+            }
+            None => self.choose_file(FileAction::SaveAs { then }, ctx),
         }
-    }
-
-    pub(super) fn save_as(&mut self) -> bool {
-        let file_name = format!(
-            "{}.vc",
-            std::path::Path::new(&self.doc_name()).file_stem().unwrap_or_default().to_string_lossy()
-        );
-        let Some(mut path) = rfd::FileDialog::new()
-            .add_filter("Void Canvas", &["vc"])
-            .set_file_name(file_name)
-            .save_file()
-        else {
-            return false;
-        };
-        if path.extension().is_none_or(|ext| ext != "vc") {
-            path.set_extension("vc");
-        }
-        self.write_file(path.to_string_lossy().to_string())
     }
 
     /// Writes next to the target first and then renames, so a failed write can't wipe the old file.
@@ -100,17 +49,6 @@ impl AsciiArtEditor {
                 self.show_status(format!("Save failed: {e}"));
                 false
             }
-        }
-    }
-
-    pub(super) fn open(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Void Canvas or text", &["vc", "txt"])
-            .add_filter("Void Canvas", &["vc"])
-            .add_filter("Text", &["txt"])
-            .pick_file()
-        {
-            self.open_path(&path);
         }
     }
 

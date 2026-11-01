@@ -617,6 +617,99 @@ mod ui {
         &LINES
     }
 
+    /// An empty folder of its own for one test.
+    fn temp_folder(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("void-canvas-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn saving_a_new_document_goes_through_the_built_in_chooser() {
+        let dir = temp_folder("save");
+        let mut harness = harness();
+        harness.state_mut().last_dir = Some(dir.clone());
+        set_row(&mut harness, 0, 0, "hi");
+
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::S);
+        harness.step();
+        harness.step();
+        let browser = harness.state_mut().file_browser.as_mut().expect("the chooser is open");
+        assert_eq!((browser.dir.clone(), browser.name.as_str()), (dir.canonicalize().unwrap(), "Untitled.vc"));
+        browser.name = "art".into(); // the extension gets added
+        harness.get_by_label("Save").click();
+        harness.step();
+
+        let path = dir.join("art.vc");
+        let app = harness.state();
+        assert!(app.file_browser.is_none());
+        assert!(path.is_file());
+        assert_eq!(app.doc.file_path.as_deref(), Some(path.to_str().unwrap()));
+        assert!(!app.doc.modified);
+
+        // From now on Ctrl+S writes straight to the file.
+        set_row(&mut harness, 0, 0, "yo");
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::S);
+        harness.step();
+        assert!(harness.state().file_browser.is_none());
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"y\""));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_built_in_chooser_lists_folders_and_matching_files() {
+        let dir = temp_folder("open");
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        std::fs::create_dir(dir.join(".hidden")).unwrap();
+        std::fs::write(dir.join("notes.md"), "").unwrap();
+        let mut doc = crate::document::Document::new(3, 1);
+        doc.layers[0].set(1, 0, crate::document::Cell::new('Q', crate::document::Color::WHITE, crate::document::Color::TRANSPARENT));
+        std::fs::write(dir.join("pic.vc"), serde_json::to_string(&doc).unwrap()).unwrap();
+
+        let mut harness = harness();
+        harness.state_mut().last_dir = Some(dir.clone());
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::O);
+        harness.step();
+        harness.step();
+        assert!(harness.query_by_label_contains("sub").is_some());
+        assert!(harness.query_by_label_contains(".hidden").is_none());
+        assert!(harness.query_by_label_contains("notes.md").is_none());
+
+        harness.get_by_label_contains("pic.vc").click();
+        harness.step();
+        harness.get_by_role_and_label(Role::Button, "Open").click();
+        harness.step();
+        let app = harness.state();
+        assert!(app.file_browser.is_none());
+        assert_eq!((app.doc.width, app.doc.height), (3, 1));
+        assert_eq!(glyph_at(&harness, 1, 0), 'Q');
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn saving_before_opening_continues_to_the_open_chooser() {
+        let dir = temp_folder("save-then-open");
+        let mut harness = harness();
+        harness.state_mut().last_dir = Some(dir.clone());
+        set_row(&mut harness, 0, 0, "x");
+        harness.state_mut().doc.modified = true;
+
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::O);
+        harness.step();
+        harness.step();
+        harness.get_by_label("Save").click(); // in "Unsaved changes"
+        harness.step();
+        harness.step();
+        harness.get_by_label("Save").click(); // in the chooser
+        harness.step();
+
+        assert!(dir.join("Untitled.vc").is_file());
+        let browser = harness.state().file_browser.as_ref().expect("Open comes next");
+        assert!(browser.action == crate::app::FileAction::Open);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn dialogs_and_dock_tabs_render() {
         let mut harness = harness();

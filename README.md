@@ -154,6 +154,7 @@ src/
 │   ├── replace.rs       Replace dialog
 │   ├── banner.rs        Insert Banner dialog
 │   ├── storage.rs       Settings, recent files, autosave
+│   ├── file_dialog.rs   System file dialog, with a built-in chooser as fallback
 │   └── file_io.rs       Open, save, export
 ├── document/
 │   ├── cell.rs          Cell & Color types, compositing
@@ -185,7 +186,7 @@ To re-render the README screenshot offscreen:
 | [egui](https://crates.io/crates/egui) | Immediate-mode GUI (0.35) |
 | [eframe](https://crates.io/crates/eframe) | Native window / app shell |
 | [serde](https://crates.io/crates/serde) + [serde_json](https://crates.io/crates/serde_json) | Serialisation |
-| [rfd](https://crates.io/crates/rfd) | Native file dialogs |
+| [rfd](https://crates.io/crates/rfd) | Native file dialogs (a built-in chooser takes over when they can't open, e.g. Linux without xdg-desktop-portal) |
 | [image](https://crates.io/crates/image) | PNG encoding |
 | [ab_glyph](https://crates.io/crates/ab_glyph) | Font rasterisation for PNG export |
 | [egui_kittest](https://crates.io/crates/egui_kittest) | Headless UI tests (dev only) |

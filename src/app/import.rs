@@ -33,12 +33,6 @@ pub fn is_image(path: &std::path::Path) -> bool {
 }
 
 impl AsciiArtEditor {
-    pub(super) fn choose_image_to_import(&mut self) {
-        if let Some(path) = rfd::FileDialog::new().add_filter("Images", IMAGE_EXTENSIONS).pick_file() {
-            self.start_image_import(&path);
-        }
-    }
-
     /// Loads the picture and opens the import dialog.
     pub fn start_image_import(&mut self, path: &std::path::Path) {
         let image = match image::open(path) {
