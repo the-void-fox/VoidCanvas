@@ -61,6 +61,10 @@ impl AsciiArtEditor {
             self.start_image_import(path);
             return;
         }
+        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("obj")) {
+            self.load_model(path);
+            return;
+        }
         let shown = path.to_string_lossy().to_string();
         if let Some(tab) = self.tab_with_file(&shown) {
             self.switch_tab(tab);

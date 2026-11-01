@@ -20,6 +20,8 @@ pub enum Object3D {
     Text { text: String, font: usize, depth: f32 },
     /// Cells (a selection's) pushed out into blocks of their own colours, `depth` cells deep.
     Art { cells: Vec<Vec<Cell>>, depth: f32 },
+    /// A triangle mesh (from an OBJ file), centred and scaled to fit the unit sphere.
+    Mesh { name: String, vertices: Vec<[f32; 3]>, faces: Vec<[u32; 3]>, smooth: bool },
 }
 
 impl Object3D {
@@ -32,6 +34,7 @@ impl Object3D {
             Object3D::Cone => "Cone",
             Object3D::Text { .. } => "Text",
             Object3D::Art { .. } => "Art",
+            Object3D::Mesh { .. } => "Model",
         }
     }
 }
@@ -156,6 +159,7 @@ struct Hit {
 enum Shape {
     Field(fn(Vec3) -> f32),
     Voxels(Voxels),
+    Mesh(Mesh),
 }
 
 /// Columns of blocks: `solid[row][column]` with its colour, centred on the origin.
@@ -200,6 +204,7 @@ impl Shape {
                 let solid = rows.iter().map(|row| row.chars().map(|c| (c != ' ').then_some(None)).collect()).collect();
                 Shape::Voxels(Voxels::new(solid, *depth))
             }
+            Object3D::Mesh { vertices, faces, smooth, .. } => Shape::Mesh(Mesh::new(vertices, faces, *smooth)),
             Object3D::Art { cells, depth } => {
                 let solid = cells
                     .iter()
@@ -218,6 +223,7 @@ impl Shape {
         match self {
             Shape::Field(field) => march(*field, origin, dir).map(|normal| Hit { normal, color: None }),
             Shape::Voxels(voxels) => voxels.hit(origin, dir),
+            Shape::Mesh(mesh) => mesh.hit(origin, dir),
         }
     }
 }
@@ -313,6 +319,225 @@ impl Voxels {
         None
     }
 }
+
+fn sub(a: Vec3, b: Vec3) -> Vec3 {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn cross(a: Vec3, b: Vec3) -> Vec3 {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+/// A triangle ready for rays: a corner, two edges and the normals at its corners.
+struct Tri {
+    v0: Vec3,
+    e1: Vec3,
+    e2: Vec3,
+    normals: [Vec3; 3],
+}
+
+/// A node of the bounding-volume tree: a box around `count` triangles from `start`, or (with
+/// `count` 0) around its two children at `start` and `start + 1`.
+struct Node {
+    min: Vec3,
+    max: Vec3,
+    start: u32,
+    count: u32,
+}
+
+/// Triangles in a bounding-volume tree, so a ray only looks at the few near it.
+struct Mesh {
+    tris: Vec<Tri>,
+    nodes: Vec<Node>,
+}
+
+impl Mesh {
+    fn new(vertices: &[[f32; 3]], faces: &[[u32; 3]], smooth: bool) -> Self {
+        let faces: Vec<[usize; 3]> = faces
+            .iter()
+            .map(|f| f.map(|i| i as usize))
+            .filter(|f| f.iter().all(|&i| i < vertices.len()))
+            .collect();
+        let face_normal = |f: &[usize; 3]| cross(sub(vertices[f[1]], vertices[f[0]]), sub(vertices[f[2]], vertices[f[0]]));
+        // Smooth shading: a vertex's normal is the average of its faces' (weighted by area).
+        let mut vertex_normals = vec![[0.0; 3]; vertices.len()];
+        if smooth {
+            for f in &faces {
+                let n = face_normal(f);
+                for &i in f {
+                    vertex_normals[i] = add(vertex_normals[i], n);
+                }
+            }
+        }
+        let mut tris: Vec<Tri> = faces
+            .iter()
+            .map(|f| {
+                let flat = normalize(face_normal(f));
+                let normals = if smooth { f.map(|i| normalize(vertex_normals[i])) } else { [flat; 3] };
+                let v0 = vertices[f[0]];
+                Tri { v0, e1: sub(vertices[f[1]], v0), e2: sub(vertices[f[2]], v0), normals }
+            })
+            .collect();
+        let mut nodes = Vec::new();
+        if !tris.is_empty() {
+            let len = tris.len();
+            build(&mut tris, &mut nodes, 0, len);
+        }
+        Self { tris, nodes }
+    }
+
+    fn hit(&self, origin: Vec3, dir: Vec3) -> Option<Hit> {
+        if self.nodes.is_empty() { return None; }
+        let inv = dir.map(|d| if d.abs() < 1e-12 { f32::INFINITY.copysign(d) } else { 1.0 / d });
+        let mut best: Option<(f32, usize, f32, f32)> = None;
+        let mut stack = vec![0usize];
+        while let Some(n) = stack.pop() {
+            let node = &self.nodes[n];
+            let limit = best.map_or(f32::INFINITY, |b| b.0);
+            if !slab(node, origin, inv, limit) { continue; }
+            if node.count == 0 {
+                stack.push(node.start as usize);
+                stack.push(node.start as usize + 1);
+                continue;
+            }
+            for t in node.start as usize..(node.start + node.count) as usize {
+                if let Some((dist, u, v)) = intersect(&self.tris[t], origin, dir)
+                    && best.is_none_or(|b| dist < b.0)
+                {
+                    best = Some((dist, t, u, v));
+                }
+            }
+        }
+        let (_, t, u, v) = best?;
+        let n = &self.tris[t].normals;
+        let mut normal = normalize(add(add(scale(n[0], 1.0 - u - v), scale(n[1], u)), scale(n[2], v)));
+        // Both sides of a face are lit: an open model shows its inside too.
+        if dot(normal, dir) > 0.0 {
+            normal = scale(normal, -1.0);
+        }
+        Some(Hit { normal, color: None })
+    }
+}
+
+/// Splits `tris[from..to]` at the median along the longest side of their box; returns the node index.
+fn build(tris: &mut [Tri], nodes: &mut Vec<Node>, from: usize, to: usize) -> usize {
+    let corners = |t: &Tri| [t.v0, add(t.v0, t.e1), add(t.v0, t.e2)];
+    let (mut min, mut max) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+    for t in &tris[from..to] {
+        for c in corners(t) {
+            for k in 0..3 {
+                min[k] = min[k].min(c[k]);
+                max[k] = max[k].max(c[k]);
+            }
+        }
+    }
+    let index = nodes.len();
+    nodes.push(Node { min, max, start: from as u32, count: (to - from) as u32 });
+    if to - from <= 4 {
+        return index;
+    }
+    let size = sub(max, min);
+    let axis = if size[0] >= size[1] && size[0] >= size[2] { 0 } else if size[1] >= size[2] { 1 } else { 2 };
+    let centre = |t: &Tri| t.v0[axis] + (t.e1[axis] + t.e2[axis]) / 3.0;
+    let mid = (from + to) / 2;
+    tris[from..to].select_nth_unstable_by(mid - from, |a, b| centre(a).total_cmp(&centre(b)));
+    // The children sit next to each other, so a node needs only the first one's place.
+    let first = nodes.len();
+    nodes.push(Node { min, max, start: 0, count: 0 });
+    nodes.push(Node { min, max, start: 0, count: 0 });
+    let left = build(tris, nodes, from, mid);
+    nodes.swap(first, left);
+    let right = build(tris, nodes, mid, to);
+    nodes.swap(first + 1, right);
+    // Children built further down were moved into place; fix the nodes that pointed at them.
+    nodes[index] = Node { min, max, start: first as u32, count: 0 };
+    index
+}
+
+/// Does the ray enter the node's box before `limit`?
+fn slab(node: &Node, origin: Vec3, inv: Vec3, limit: f32) -> bool {
+    let (mut near, mut far) = (0.0f32, limit);
+    for k in 0..3 {
+        let (a, b) = ((node.min[k] - origin[k]) * inv[k], (node.max[k] - origin[k]) * inv[k]);
+        near = near.max(a.min(b));
+        far = far.min(a.max(b));
+    }
+    near <= far
+}
+
+/// Ray and triangle (Möller & Trumbore): distance and barycentric (u, v).
+fn intersect(tri: &Tri, origin: Vec3, dir: Vec3) -> Option<(f32, f32, f32)> {
+    let p = cross(dir, tri.e2);
+    let det = dot(tri.e1, p);
+    if det.abs() < 1e-9 { return None; }
+    let inv = 1.0 / det;
+    let s = sub(origin, tri.v0);
+    let u = dot(s, p) * inv;
+    if !(0.0..=1.0).contains(&u) { return None; }
+    let q = cross(s, tri.e1);
+    let v = dot(dir, q) * inv;
+    if v < 0.0 || u + v > 1.0 { return None; }
+    let t = dot(tri.e2, q) * inv;
+    (t > 1e-5).then_some((t, u, v))
+}
+
+/// Reads an OBJ model: its vertices and triangles, centred and scaled to fit the unit sphere.
+/// Faces with more corners become fans of triangles; texture and normal indices are ignored.
+pub fn parse_obj(text: &str) -> Result<MeshData, String> {
+    let mut vertices: Vec<[f32; 3]> = Vec::new();
+    let mut faces: Vec<[u32; 3]> = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let mut parts = line.split_whitespace();
+        match parts.next() {
+            Some("v") => {
+                let coords: Vec<f32> = parts.take(3).map(|p| p.parse::<f32>()).collect::<Result<_, _>>().map_err(|_| format!("line {}: a vertex needs three numbers", n + 1))?;
+                if coords.len() < 3 { return Err(format!("line {}: a vertex needs three numbers", n + 1)); }
+                vertices.push([coords[0], coords[1], coords[2]]);
+            }
+            Some("f") => {
+                let corners: Vec<u32> = parts
+                    .map(|p| {
+                        let index: i64 = p.split('/').next().unwrap_or("").parse().map_err(|_| format!("line {}: a face refers to vertices by number", n + 1))?;
+                        // Negative numbers count back from the latest vertex.
+                        let resolved = if index < 0 { vertices.len() as i64 + index } else { index - 1 };
+                        if resolved < 0 || resolved >= vertices.len() as i64 {
+                            return Err(format!("line {}: no vertex {index}", n + 1));
+                        }
+                        Ok(resolved as u32)
+                    })
+                    .collect::<Result<_, String>>()?;
+                for k in 1..corners.len().saturating_sub(1) {
+                    faces.push([corners[0], corners[k], corners[k + 1]]);
+                }
+                if faces.len() > MAX_TRIANGLES {
+                    return Err(format!("more than {MAX_TRIANGLES} triangles"));
+                }
+            }
+            _ => {}
+        }
+    }
+    if faces.is_empty() {
+        return Err("no faces in the file".into());
+    }
+    // Centre the box and fit the farthest vertex on the unit sphere.
+    let (mut min, mut max) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+    for v in &vertices {
+        for k in 0..3 {
+            min[k] = min[k].min(v[k]);
+            max[k] = max[k].max(v[k]);
+        }
+    }
+    let centre = scale(add(min, max), 0.5);
+    let reach = vertices.iter().map(|&v| length(sub(v, centre))).fold(0.0f32, f32::max).max(1e-6);
+    let vertices = vertices.iter().map(|&v| scale(sub(v, centre), 0.98 / reach)).collect();
+    Ok((vertices, faces))
+}
+
+/// A model's vertices and its triangles (indices into them).
+pub type MeshData = (Vec<[f32; 3]>, Vec<[u32; 3]>);
+
+/// Models bigger than this are refused (rendering every frame would crawl).
+pub const MAX_TRIANGLES: usize = 400_000;
 
 /// What one ray saw.
 #[derive(Clone, Copy)]

@@ -46,6 +46,7 @@ pub enum Action {
     BrushFromSelection,
     New3D,
     New3DFromSelection,
+    New3DFromModel,
     Edit3D,
     Rasterize3D,
     UseBrush(crate::tools::brush::BrushPreset),
@@ -179,6 +180,7 @@ impl AsciiArtEditor {
         if has_selection {
             add("Layer", "New 3D Layer from Selection", "", Action::New3DFromSelection);
         }
+        add("Layer", "New 3D Layer from OBJ Model…", "", Action::New3DFromModel);
         if self.doc.active_layer().scene.is_some() {
             add("Layer", "Edit 3D…", "", Action::Edit3D);
             add("Layer", "Rasterize 3D", "", Action::Rasterize3D);
@@ -271,6 +273,10 @@ impl AsciiArtEditor {
                 self.add_3d_from_selection();
             }
             Action::Edit3D => self.edit_3d(self.doc.active_layer),
+            Action::New3DFromModel => {
+                self.close_3d();
+                self.choose_file(FileAction::LoadModel, ctx);
+            }
             Action::Rasterize3D => self.rasterize_3d(),
             Action::UseBrush(preset) => {
                 self.tool_options.brush = preset.kind;

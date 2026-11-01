@@ -2234,6 +2234,74 @@ mod library_pools {
     }
 }
 
+mod obj_models {
+    use crate::document::scene::{Object3D, Scene3D, Style3D, parse_obj};
+    use crate::document::{Document, codec};
+
+    const CUBE: &str = "# a cube\nv -1 -1 -1\nv 1 -1 -1\nv 1 1 -1\nv -1 1 -1\nv -1 -1 1\nv 1 -1 1\nv 1 1 1\nv -1 1 1\nvt 0 0\nvn 0 0 1\nf 1/1/1 2/1/1 3/1/1 4/1/1\nf 5 8 7 6\nf 1 5 6 2\nf -5 -1 -2 -6\nf 2 6 7 3\nf 1 4 8 5\n";
+
+    #[test]
+    fn obj_files_parse_into_triangles() {
+        let (vertices, faces) = parse_obj(CUBE).unwrap();
+        assert_eq!((vertices.len(), faces.len()), (8, 12), "six quads become twelve triangles");
+        let reach = vertices.iter().map(|v| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()).fold(0.0f32, f32::max);
+        assert!((reach - 0.98).abs() < 1e-4, "fits the unit sphere: {reach}");
+        assert_eq!(faces[6], [3, 7, 6], "negative indices count back from the last vertex");
+
+        assert!(parse_obj("v 0 0 0\n").unwrap_err().contains("no faces"));
+        assert!(parse_obj("v 0 x 0\n").unwrap_err().contains("line 1"));
+        assert!(parse_obj("v 0 0 0\nv 1 0 0\nf 1 2 3\n").unwrap_err().contains("no vertex 3"));
+    }
+
+    /// A square of `n` × `n` quads in the xy plane, as OBJ.
+    fn square(n: usize) -> String {
+        let mut obj = String::new();
+        for y in 0..=n {
+            for x in 0..=n {
+                obj += &format!("v {} {} 0\n", x as f32 / n as f32 - 0.5, y as f32 / n as f32 - 0.5);
+            }
+        }
+        for y in 0..n {
+            for x in 0..n {
+                let i = y * (n + 1) + x + 1;
+                obj += &format!("f {} {} {} {}\n", i, i + 1, i + n + 2, i + n + 1);
+            }
+        }
+        obj
+    }
+
+    #[test]
+    fn the_tree_finds_every_triangle() {
+        let scene = |n: usize| {
+            let (vertices, faces) = parse_obj(&square(n)).unwrap();
+            Scene3D { object: Object3D::Mesh { name: "square".into(), vertices, faces, smooth: false }, style: Style3D::Blocks, turn: [0.0; 3], ..Scene3D::default() }
+        };
+        let (many, two) = (scene(40).render(40, 20, 0), scene(1).render(40, 20, 0));
+        assert!(many.iter().filter(|c| !c.is_empty()).count() > 100);
+        assert_eq!(many, two, "3200 triangles in a tree show what 2 show");
+    }
+
+    #[test]
+    fn opening_an_obj_file_makes_a_3d_layer() {
+        let path = std::env::temp_dir().join(format!("void-canvas-test-{}.obj", std::process::id()));
+        std::fs::write(&path, CUBE).unwrap();
+        let mut app = crate::app::AsciiArtEditor::default();
+        app.open_path(&path);
+        std::fs::remove_file(&path).unwrap();
+        let layer = app.doc.active_layer();
+        assert!(matches!(&layer.scene.as_deref().unwrap().object, Object3D::Mesh { faces, .. } if faces.len() == 12));
+        assert!(layer.name.starts_with("void-canvas-test"));
+        app.history.undo(&mut app.doc);
+        assert_eq!(app.doc.layers.len(), 1);
+
+        let mut doc = Document::new(20, 10);
+        let (vertices, faces) = parse_obj(CUBE).unwrap();
+        doc.layers[0].scene = Some(Box::new(Scene3D { object: Object3D::Mesh { name: "cube".into(), vertices, faces, smooth: true }, ..Scene3D::default() }));
+        let back = codec::decode(&codec::encode(&doc)).unwrap();
+        assert_eq!(back.layers[0].scene, doc.layers[0].scene, "models are kept in files");
+    }
+}
+
 mod gradients {
     use super::{NONE, blue, ctx, red};
     use crate::document::Document;

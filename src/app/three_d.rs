@@ -3,7 +3,7 @@
 use eframe::egui::{self, *};
 
 use super::AsciiArtEditor;
-use crate::document::scene::{Object3D, Scene3D, Style3D};
+use crate::document::scene::{Object3D, Scene3D, Style3D, parse_obj};
 use crate::document::{Cell, Layer};
 use crate::history::Command;
 use crate::{figlet, icons, theme};
@@ -31,6 +31,39 @@ impl AsciiArtEditor {
         self.stop_playback();
         self.history.execute_as(Command::LayerAdd { index, layer }, "New 3D Layer", &mut self.doc);
         self.edit_3d(index);
+    }
+
+    /// A model from an OBJ file: into the 3D window's layer if it is open (one undo step), else
+    /// into a new 3D layer.
+    pub(super) fn load_model(&mut self, path: &std::path::Path) {
+        let text = match std::fs::read(path) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(e) => {
+                self.show_status(format!("Can't read the model: {e}"));
+                return;
+            }
+        };
+        let (vertices, faces) = match parse_obj(&text) {
+            Ok(mesh) => mesh,
+            Err(e) => {
+                self.show_status(format!("Can't read the model: {e}"));
+                return;
+            }
+        };
+        let name = path.file_stem().map_or_else(|| "Model".to_owned(), |s| s.to_string_lossy().to_string());
+        let triangles = faces.len();
+        let object = Object3D::Mesh { name: name.clone(), vertices, faces, smooth: true };
+        match self.three_d.as_ref().map(|w| w.layer) {
+            Some(index) if self.doc.layers.get(index).is_some_and(|l| l.scene.is_some()) => {
+                if let Some(scene) = self.doc.layers[index].scene.as_mut() {
+                    scene.object = object;
+                }
+                self.doc.render_3d_frame(self.doc.frame);
+                self.commit_3d();
+            }
+            _ => self.add_3d_layer(&name, Scene3D { object, turn: [15.0, -30.0, 0.0], size: 0.8, ..Scene3D::default() }),
+        }
+        self.show_status(format!("{name}: {triangles} triangles"));
     }
 
     /// The selected cells of the active layer, or of the nearest 2D layer below a 3D one.
@@ -132,6 +165,7 @@ impl AsciiArtEditor {
         let mut frames = window.turntable_frames;
         let (mut open, mut rasterize, mut turntable, mut take_selection) = (true, false, false, false);
         let mut manage_ramps = false;
+        let mut load_model = false;
         let has_selection = self.tools.selection.selection.is_some();
         let name = self.doc.layers[index].name.clone();
 
@@ -156,6 +190,10 @@ impl AsciiArtEditor {
                             let text = matches!(scene.object, Object3D::Text { .. });
                             if ui.selectable_label(text, "Text").clicked() && !text {
                                 scene.object = Object3D::Text { text: "VOID".into(), font: solid_font(), depth: 4.0 };
+                            }
+                            let model = matches!(scene.object, Object3D::Mesh { .. });
+                            if ui.selectable_label(model, "Model").on_hover_text("A 3D model from an OBJ file").clicked() && !model {
+                                load_model = true;
                             }
                             let art = matches!(scene.object, Object3D::Art { .. });
                             if ui.add_enabled(art || has_selection, Button::selectable(art, "Art"))
@@ -183,6 +221,13 @@ impl AsciiArtEditor {
                             });
                         ui.label("Depth");
                         ui.add(DragValue::new(depth).range(0.5..=40.0).speed(0.1).fixed_decimals(1));
+                    }),
+                    Object3D::Mesh { name, faces, smooth, .. } => row(ui, "Model", |ui| {
+                        ui.label(RichText::new(format!("{name}  ·  {} triangles", faces.len())).color(theme::TEXT_DIM));
+                        if ui.button("Load OBJ…").clicked() {
+                            load_model = true;
+                        }
+                        ui.toggle_value(smooth, "Smooth").on_hover_text("Smooth shading across faces (off: flat faces)");
                     }),
                     Object3D::Art { depth, .. } => row(ui, "Art", |ui| {
                         if ui.add_enabled(has_selection, Button::new("Take Selection")).on_hover_text("Use the selected art instead").clicked() {
@@ -301,6 +346,9 @@ impl AsciiArtEditor {
         if !open {
             self.commit_3d();
             self.three_d = None;
+        }
+        if load_model {
+            self.choose_file(super::file_dialog::FileAction::LoadModel, ctx);
         }
         if manage_ramps {
             self.open_library(super::library::LibraryTab::Ramps);

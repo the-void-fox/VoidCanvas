@@ -21,6 +21,8 @@ pub enum FileAction {
     ExportHtml,
     ExportPng { transparent: bool },
     ExportGif,
+    /// A 3D model for a 3D layer.
+    LoadModel,
 }
 
 impl FileAction {
@@ -34,6 +36,7 @@ impl FileAction {
             FileAction::ExportHtml => "Export HTML",
             FileAction::ExportPng { .. } => "Export PNG",
             FileAction::ExportGif => "Export GIF",
+            FileAction::LoadModel => "Load 3D Model",
         }
     }
 
@@ -48,11 +51,12 @@ impl FileAction {
             FileAction::ExportHtml => ("HTML", &["html"]),
             FileAction::ExportPng { .. } => ("PNG Image", &["png"]),
             FileAction::ExportGif => ("GIF Animation", &["gif"]),
+            FileAction::LoadModel => ("OBJ model", &["obj"]),
         }
     }
 
     pub(super) fn saves(&self) -> bool {
-        !matches!(self, FileAction::Open | FileAction::ImportImage)
+        !matches!(self, FileAction::Open | FileAction::ImportImage | FileAction::LoadModel)
     }
 }
 
@@ -149,6 +153,7 @@ impl AsciiArtEditor {
                     Err(e) => self.show_status(format!("PNG export failed: {e}")),
                 }
             }
+            FileAction::LoadModel => self.load_model(&path),
             FileAction::ExportGif => match export::write_gif(&self.doc, &path) {
                 Ok(()) => self.show_status(format!("Exported GIF: {}", path.display())),
                 Err(e) => self.show_status(format!("GIF export failed: {e}")),

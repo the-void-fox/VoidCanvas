@@ -1024,7 +1024,7 @@ impl AsciiArtEditor {
             let screen = ctx.content_rect();
             painter.rect_filled(screen, 0.0, Color32::from_black_alpha(190));
             painter.rect_stroke(screen.shrink(16.0), 12.0, Stroke::new(2.0, theme::ACCENT), StrokeKind::Inside);
-            painter.text(screen.center(), Align2::CENTER_CENTER, "Drop a .vc / .txt file to open, or a picture to import", theme::semibold(20.0), theme::TEXT);
+            painter.text(screen.center(), Align2::CENTER_CENTER, "Drop a .vc / .txt file to open, a picture to import or an .obj model", theme::semibold(20.0), theme::TEXT);
         }
     }
 
