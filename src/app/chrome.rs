@@ -59,6 +59,10 @@ impl AsciiArtEditor {
                         if ui.button("Export HTML…").clicked() { self.choose_file(FileAction::ExportHtml, &ctx); }
                         if ui.button("Export PNG…").clicked() { self.choose_file(FileAction::ExportPng { transparent: false }, &ctx); }
                         if ui.button("Export PNG (Transparent)…").clicked() { self.choose_file(FileAction::ExportPng { transparent: true }, &ctx); }
+                        let gif = Button::new("Export GIF…");
+                        if ui.add_enabled(self.doc.frame_count() > 1, gif).on_disabled_hover_text("Needs more than one frame").clicked() {
+                            self.choose_file(FileAction::ExportGif, &ctx);
+                        }
                         ui.separator();
                         if ui.add(Button::new("Close Tab").shortcut_text("Ctrl+W")).clicked() { self.run(Action::CloseTab, &ctx); }
                         if ui.button("Quit").clicked() { self.run(Action::Quit, &ctx); }
@@ -113,6 +117,22 @@ impl AsciiArtEditor {
 
                     ui.menu_button("Canvas", |ui| {
                         if ui.button("Resize…").clicked() { self.run(Action::Resize, &ctx); }
+                    });
+
+                    ui.menu_button("Animation", |ui| {
+                        let frames = self.doc.frame_count();
+                        if ui.button("New Frame (Copy)").on_hover_text("A copy of the frame shown, so still parts stay").clicked() {
+                            self.run(Action::NewFrame, &ctx);
+                        }
+                        if ui.button("New Empty Frame").clicked() { self.run(Action::NewEmptyFrame, &ctx); }
+                        if ui.add_enabled(frames > 1, Button::new("Delete Frame")).clicked() { self.run(Action::DeleteFrame, &ctx); }
+                        ui.separator();
+                        let play = if self.playback.playing { "Stop" } else { "Play" };
+                        if ui.add_enabled(frames > 1, Button::new(play).shortcut_text("Enter")).clicked() { self.run(Action::Play, &ctx); }
+                        if ui.add_enabled(frames > 1, Button::new("Previous Frame").shortcut_text(",")).clicked() { self.run(Action::PrevFrame, &ctx); }
+                        if ui.add_enabled(frames > 1, Button::new("Next Frame").shortcut_text(".")).clicked() { self.run(Action::NextFrame, &ctx); }
+                        ui.separator();
+                        ui.checkbox(&mut self.canvas_state.onion_skin, "Onion Skin");
                     });
 
                     ui.menu_button("View", |ui| {

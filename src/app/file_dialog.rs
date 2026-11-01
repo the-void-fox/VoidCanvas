@@ -20,6 +20,7 @@ pub enum FileAction {
     ExportAnsi,
     ExportHtml,
     ExportPng { transparent: bool },
+    ExportGif,
 }
 
 impl FileAction {
@@ -32,6 +33,7 @@ impl FileAction {
             FileAction::ExportAnsi => "Export ANSI",
             FileAction::ExportHtml => "Export HTML",
             FileAction::ExportPng { .. } => "Export PNG",
+            FileAction::ExportGif => "Export GIF",
         }
     }
 
@@ -45,6 +47,7 @@ impl FileAction {
             FileAction::ExportAnsi => ("ANSI", &["ans"]),
             FileAction::ExportHtml => ("HTML", &["html"]),
             FileAction::ExportPng { .. } => ("PNG Image", &["png"]),
+            FileAction::ExportGif => ("GIF Animation", &["gif"]),
         }
     }
 
@@ -130,6 +133,10 @@ impl AsciiArtEditor {
                     Err(e) => self.show_status(format!("PNG export failed: {e}")),
                 }
             }
+            FileAction::ExportGif => match export::write_gif(&self.doc, &path) {
+                Ok(()) => self.show_status(format!("Exported GIF: {}", path.display())),
+                Err(e) => self.show_status(format!("GIF export failed: {e}")),
+            },
             _ => {}
         }
     }

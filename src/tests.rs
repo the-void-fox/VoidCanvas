@@ -77,9 +77,10 @@ fn merge_down_bakes_into_the_layer_below() {
 
     let mut history = History::new(10);
     let cmd = Command::LayerMergeDown {
-        upper:   1,
-        layer:   doc.layers[1].clone(),
-        changes: doc.merge_down_changes(1),
+        upper:  1,
+        layer:  doc.layers[1].clone(),
+        below:  doc.layers[0].clone(),
+        merged: doc.merged_down(1),
     };
     history.execute(cmd, &mut doc);
     assert_eq!(doc.layers.len(), 1);
@@ -127,7 +128,7 @@ fn drawing_is_undone_on_its_own_layer_after_reordering() {
     doc.layers[1].set(0, 0, cell.clone());
     let mut changes = Changes::new();
     changes.insert((0, 0), (Cell::empty(), cell));
-    history.push(Command::Draw { layer_idx: 1, changes });
+    history.push(Command::Draw { layer_idx: 1, frame: 0, changes });
     history.execute(Command::LayerMove { from: 1, to: 0 }, &mut doc);
 
     history.undo(&mut doc);
@@ -144,7 +145,7 @@ fn history_lists_steps_and_jumps_between_them() {
         let cell = glyph(char::from(b'a' + i as u8));
         doc.layers[0].set(i, 0, cell.clone());
         let changes = Changes::from([((i, 0), (Cell::empty(), cell))]);
-        history.push_as(Command::Draw { layer_idx: 0, changes }, *label);
+        history.push_as(Command::Draw { layer_idx: 0, frame: 0, changes }, *label);
     }
     let row = |doc: &Document| (0..3).map(|x| doc.layers[0].get(x, 0).unwrap().ch).collect::<String>();
 
@@ -166,7 +167,7 @@ fn undo_works_on_a_locked_layer() {
     doc.layers[0].set(0, 0, cell.clone());
     let mut changes = Changes::new();
     changes.insert((0, 0), (Cell::empty(), cell));
-    history.push(Command::Draw { layer_idx: 0, changes });
+    history.push(Command::Draw { layer_idx: 0, frame: 0, changes });
 
     doc.layers[0].locked = true;
     history.undo(&mut doc);
@@ -208,7 +209,7 @@ fn undoing_a_selection_move_restores_the_original() {
     assert_eq!(row, " AB");
 
     let mut history = History::new(10);
-    history.push(Command::Draw { layer_idx: 0, changes: stroke });
+    history.push(Command::Draw { layer_idx: 0, frame: 0, changes: stroke });
     history.undo(&mut doc);
     assert_eq!(doc.layers, original);
 }
@@ -407,6 +408,34 @@ mod ui {
         harness.step();
         assert!(harness.state().command_palette.is_none());
         assert_eq!(harness.state().active_tool, ToolType::Gradient);
+    }
+
+    #[test]
+    fn enter_plays_the_animation_and_drawing_stops_it() {
+        let mut harness = harness();
+        let ctx = harness.ctx.clone();
+        harness.state_mut().run(crate::app::commands::Action::NewFrame, &ctx);
+        // The second frame stays long enough not to wrap around while the test clicks.
+        harness.state_mut().doc.durations = vec![1000, 9000];
+        harness.key_press(egui::Key::Comma);
+        harness.step();
+        assert_eq!(harness.state().doc.frame, 0, ", goes to the previous frame");
+
+        harness.key_press(egui::Key::Enter);
+        harness.step();
+        assert!(harness.state().playback.playing);
+        // Each test step is a quarter of a second.
+        for _ in 0..4 { harness.step(); }
+        assert_eq!(harness.state().doc.frame, 1);
+
+        let pos = cell_pos(&harness, 2, 2);
+        harness.hover_at(pos);
+        harness.event(button(pos, true));
+        harness.event(button(pos, false));
+        harness.step();
+        let app = harness.state();
+        assert!(!app.playback.playing, "drawing stops playback");
+        assert_eq!((app.doc.frame, glyph_at(&harness, 2, 2)), (1, '#'), "and paints on the frame in view");
     }
 
     #[test]
@@ -795,7 +824,7 @@ mod ui {
         let z = crate::document::Cell::new('z', crate::document::Color::WHITE, crate::document::Color::TRANSPARENT);
         let changes = crate::document::Changes::from([((1, 1), (crate::document::Cell::empty(), z))]);
         let app = harness.state_mut();
-        app.history.execute(crate::history::Command::Draw { layer_idx: 0, changes }, &mut app.doc);
+        app.history.execute(crate::history::Command::Draw { layer_idx: 0, frame: 0, changes }, &mut app.doc);
         harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::Tab);
         harness.step();
         assert_eq!(glyph_at(&harness, 0, 0), 'A');
@@ -915,7 +944,7 @@ mod stage2_tools {
         let stamps: Vec<_> = (0..4).flat_map(|x| [(x, 0, '#'), (x, 0, '#')]).collect();
         let changes = apply_stamps(&mut doc, &stamps, &ctx('#', red(), NONE));
         let mut history = History::new(5);
-        history.push(Command::Draw { layer_idx: 0, changes });
+        history.push(Command::Draw { layer_idx: 0, frame: 0, changes });
         history.undo(&mut doc);
         assert_eq!(doc.layers, original);
     }
@@ -1213,6 +1242,145 @@ mod command_search {
         assert_eq!(keys.len(), count, "the palette remembers commands by their text");
         let matches = app.palette_matches(&entries, "exp png");
         assert_eq!(entries[matches[0]].name, "Export PNG…");
+    }
+}
+
+mod animation {
+    use super::{glyph, red, NONE};
+    use crate::document::{Cell, Document, Layer};
+    use crate::history::{Command, History};
+
+    fn at(doc: &Document, frame: usize, x: usize) -> char {
+        doc.composite_in(frame, x, 0).ch
+    }
+
+    /// Three frames of a 3×1 picture: "a", "b", "c" in the first cell.
+    fn three_frames(history: &mut History) -> Document {
+        let mut doc = Document::new(3, 1);
+        doc.layers[0].set(0, 0, glyph('a'));
+        for ch in ['b', 'c'] {
+            let index = doc.frame + 1;
+            history.execute(Command::FrameAdd { index, data: doc.blank_frame() }, &mut doc);
+            doc.layers[0].set(0, 0, glyph(ch));
+        }
+        doc
+    }
+
+    #[test]
+    fn frames_keep_their_own_cells() {
+        let mut history = History::new(50);
+        let mut doc = three_frames(&mut history);
+        assert_eq!((doc.frame_count(), doc.frame), (3, 2), "a new frame is shown");
+        assert_eq!([at(&doc, 0, 0), at(&doc, 1, 0), at(&doc, 2, 0)], ['a', 'b', 'c']);
+        doc.show_frame(0);
+        assert_eq!(doc.layers[0].get(0, 0).unwrap().ch, 'a', "the shown frame is what tools edit");
+
+        let data = doc.frame_data(0);
+        history.execute(Command::FrameAdd { index: 1, data }, &mut doc);
+        assert_eq!((doc.frame, at(&doc, 1, 0)), (1, 'a'), "a duplicate follows its original");
+
+        history.execute(Command::FrameMove { from: 1, to: 3 }, &mut doc);
+        assert_eq!((doc.frame, at(&doc, 3, 0), at(&doc, 1, 0)), (3, 'a', 'b'), "the moved frame stays shown");
+
+        let data = doc.frame_data(3);
+        history.execute(Command::FrameRemove { index: 3, data }, &mut doc);
+        assert_eq!((doc.frame_count(), doc.frame), (3, 2), "a neighbour is shown instead");
+
+        while history.undo(&mut doc) {}
+        assert_eq!(doc.frame_count(), 1);
+        assert!(doc.layers.iter().all(Layer::is_valid));
+        assert_eq!(at(&doc, 0, 0), 'a');
+    }
+
+    #[test]
+    fn undo_goes_back_to_the_frame_drawn_on() {
+        let mut history = History::new(50);
+        let mut doc = three_frames(&mut history);
+        doc.show_frame(1);
+        let changes = crate::document::Changes::from([((2, 0), (Cell::empty(), glyph('!')))]);
+        doc.layers[0].set(2, 0, glyph('!'));
+        history.push(Command::Draw { layer_idx: 0, frame: 1, changes });
+        doc.show_frame(0);
+
+        history.undo(&mut doc);
+        assert_eq!(doc.frame, 1);
+        assert_eq!(at(&doc, 1, 2), ' ');
+        doc.show_frame(2);
+        history.redo(&mut doc);
+        assert_eq!((doc.frame, at(&doc, 1, 2)), (1, '!'));
+    }
+
+    #[test]
+    fn layer_changes_reach_every_frame() {
+        let mut history = History::new(50);
+        let mut doc = three_frames(&mut history);
+        history.execute(Command::LayerAdd { index: 1, layer: Layer::new(3, 1, "Top") }, &mut doc);
+        doc.layers[1].set(1, 0, Cell::new('T', red(), NONE));
+        assert!(doc.layers[1].is_valid());
+        assert_eq!((at(&doc, 2, 1), at(&doc, 0, 1)), ('T', ' '), "a new layer starts blank in the other frames");
+
+        // Merge down bakes every frame.
+        doc.show_frame(0);
+        doc.layers[1].set(2, 0, glyph('m'));
+        let cmd = Command::LayerMergeDown { upper: 1, layer: doc.layers[1].clone(), below: doc.layers[0].clone(), merged: doc.merged_down(1) };
+        history.execute(cmd, &mut doc);
+        assert_eq!(doc.layers.len(), 1);
+        assert_eq!((at(&doc, 0, 2), at(&doc, 2, 1), at(&doc, 1, 0)), ('m', 'T', 'b'));
+
+        // Deleting the layer while on one frame and undoing it on another restores every frame.
+        doc.show_frame(2);
+        history.execute(Command::LayerAdd { index: 1, layer: doc.layers[0].clone() }, &mut doc);
+        let layer = doc.layers[0].clone();
+        history.execute(Command::LayerRemove { index: 0, layer }, &mut doc);
+        doc.show_frame(0);
+        history.undo(&mut doc);
+        assert_eq!(doc.frame, 0);
+        assert_eq!(doc.layers[0].get(2, 0).unwrap().ch, 'm', "the shown frame's cells came back, not frame 2's");
+        assert_eq!(doc.layers[0].cells_in(2)[1].ch, 'T');
+
+        // Resizing too, and undo puts the cells back.
+        let old_layers = doc.layers.clone();
+        history.execute(Command::Resize { old_size: (3, 1), new_size: (2, 2), old_layers }, &mut doc);
+        assert!(doc.layers.iter().all(Layer::is_valid));
+        assert_eq!(doc.composite_in(2, 1, 0).ch, 'T');
+        doc.show_frame(1);
+        history.undo(&mut doc);
+        assert!(doc.layers.iter().all(Layer::is_valid));
+        assert_eq!((doc.width, at(&doc, 2, 2), at(&doc, 0, 2)), (3, ' ', 'm'));
+    }
+
+    #[test]
+    fn files_keep_frames_and_still_pictures_keep_the_old_format() {
+        let mut history = History::new(50);
+        let mut doc = three_frames(&mut history);
+        doc.durations[1] = 250;
+        doc.show_frame(1);
+        let json = serde_json::to_string(&doc).unwrap();
+        let mut loaded: Document = serde_json::from_str(&json).unwrap();
+        loaded.validate().unwrap();
+        assert_eq!((loaded.frame_count(), loaded.frame, loaded.durations[1]), (3, 1, 250));
+        assert_eq!([at(&loaded, 0, 0), at(&loaded, 1, 0), at(&loaded, 2, 0)], ['a', 'b', 'c']);
+
+        let still = serde_json::to_string(&Document::new(2, 1)).unwrap();
+        assert!(!still.contains("durations") && !still.contains("frames"), "{still}");
+        let mut old: Document = serde_json::from_str(&still).unwrap();
+        old.validate().unwrap();
+        assert_eq!(old.frame_count(), 1);
+    }
+
+    #[test]
+    fn gif_export_has_every_frame() {
+        use image::AnimationDecoder;
+        let mut history = History::new(50);
+        let mut doc = three_frames(&mut history);
+        doc.durations = vec![100, 200, 300];
+        let path = std::env::temp_dir().join(format!("void-canvas-test-{}.gif", std::process::id()));
+        crate::export::write_gif(&doc, &path).unwrap();
+        let file = std::io::BufReader::new(std::fs::File::open(&path).unwrap());
+        let frames = image::codecs::gif::GifDecoder::new(file).unwrap().into_frames().collect_frames().unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let delays: Vec<u32> = frames.iter().map(|f| f.delay().numer_denom_ms().0 / f.delay().numer_denom_ms().1.max(1)).collect();
+        assert_eq!(delays, vec![100, 200, 300]);
     }
 }
 

@@ -22,9 +22,10 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 | **Colors** | Primary & secondary foreground / background slots, live RGBA picker, hex input, recent colours, VGA / xterm 256 / PICO-8 / Game Boy palettes; Replace (Ctrl+H) recolours or swaps glyphs across a layer |
 | **Canvas** | Terminal-style 1:2 cells; box-drawing, block and braille characters are drawn as shapes so they join seamlessly at any zoom; fit / 100 % zoom, optional grid |
 | **Clipboard** | Copy / cut / paste selections, also as plain text to and from other programs |
+| **Animation** | Frames with their own durations, a timeline with thumbnails, playback (`Enter`), `,` / `.` to step, onion skin, undo that returns to the frame it changed; layers are shared by all frames; **GIF** export |
 | **Tabs** | Several documents at once, each with its own undo history, view and selection; `Ctrl+Tab` switches, `Ctrl+W` closes, quitting asks about each unsaved tab |
 | **Command palette** | `Ctrl+Shift+P` / `F1`: fuzzy-search every menu action, tool, layer action, palette and recent file; recently used commands come first |
-| **Files** | Native `.vc` format (JSON), `.txt` import / export, **ANSI** (24-bit colour) and **HTML** export, **PNG** export (opaque or transparent), copy as text / ANSI, recent files, drag & drop, autosave of every unsaved tab with crash recovery |
+| **Files** | Native `.vc` format (JSON), `.txt` import / export, **ANSI** (24-bit colour) and **HTML** export, **PNG** export (opaque or transparent), animated **GIF** export, copy as text / ANSI, recent files, drag & drop, autosave of every unsaved tab with crash recovery |
 
 ---
 
@@ -60,6 +61,8 @@ cargo build --release
 | `Ctrl+S` | Save |
 | `Ctrl+Shift+S` | Save as… |
 | `Ctrl+W` | Close tab |
+| `Enter` | Play / stop the animation |
+| `,` / `.` | Previous / next frame |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | Drop a file on the window | Open `.vc` / import `.txt` |
 
@@ -160,6 +163,7 @@ src/
 │   ├── import.rs        Import Image dialog
 │   ├── replace.rs       Replace dialog
 │   ├── banner.rs        Insert Banner dialog
+│   ├── animation.rs     Frames, playback, timeline
 │   ├── storage.rs       Settings, recent files, autosave
 │   ├── tabs.rs          Document tabs
 │   ├── file_dialog.rs   System file dialog, with a built-in chooser as fallback

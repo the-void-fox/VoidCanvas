@@ -20,6 +20,8 @@ pub struct CanvasState {
     pub zoom: f32,
     pub offset: Vec2,
     pub show_grid: bool,
+    /// Animation frames before and after the shown one appear faintly under empty cells.
+    pub onion_skin: bool,
     pub cursor_cell: Option<(usize, usize)>,
     /// The pointer is in the bottom half of `cursor_cell`.
     pub cursor_lower: bool,
@@ -36,6 +38,7 @@ impl Default for CanvasState {
             zoom: 1.0,
             offset: Vec2::ZERO,
             show_grid: true,
+            onion_skin: false,
             cursor_cell: None,
             cursor_lower: false,
             march_phase: 0.0,
@@ -144,6 +147,9 @@ pub enum CanvasEvent {
 }
 
 /// Settings of the active tool that its preview depends on.
+/// Tint of the next frame in the onion skin.
+const ONION_NEXT: Color32 = Color32::from_rgb(120, 220, 230);
+
 #[derive(Clone, Copy)]
 pub struct PreviewSettings {
     pub shape: Option<Shape>,
@@ -222,11 +228,24 @@ pub fn draw_canvas(
 
     let font_id = theme::mono(CELL_H * state.zoom);
     let strokes = glyph_render::Strokes::new(cs.x, ppp);
+    // Onion skin: the previous frame (violet) wins over the next one (teal).
+    let mut ghosts = Vec::new();
+    if state.onion_skin && doc.frame_count() > 1 {
+        if doc.frame > 0 { ghosts.push((doc.frame - 1, theme::ACCENT)); }
+        if doc.frame + 1 < doc.frame_count() { ghosts.push((doc.frame + 1, ONION_NEXT)); }
+    }
     for y in y0..y1 {
         for x in x0..x1 {
             let cell = doc.composite_cell(x, y);
-            if cell.is_empty() { continue; }
             let rect = snap(state.cell_rect(x, y, origin));
+            if cell.is_empty() {
+                let ghost = ghosts.iter().map(|&(f, tint)| (doc.composite_in(f, x, y), tint)).find(|(g, _)| !g.is_empty());
+                if let Some((g, tint)) = ghost {
+                    let bg = if g.bg.is_transparent() { Color32::TRANSPARENT } else { tint.gamma_multiply(0.12) };
+                    draw_cell(&painter, rect, g.ch, tint.gamma_multiply(0.4), bg, &font_id, strokes);
+                }
+                continue;
+            }
             draw_cell(&painter, rect, cell.ch, cell.fg.to_egui(), cell.bg.to_egui(), &font_id, strokes);
         }
     }

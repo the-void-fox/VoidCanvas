@@ -56,17 +56,17 @@ impl History {
 
     /// Records drawn changes; consecutive pushes with the same `group`
     /// (e.g. one typing session) become a single undo step.
-    pub fn push_grouped(&mut self, layer_idx: usize, changes: Changes, group: u64, label: &str) {
+    pub fn push_grouped(&mut self, layer_idx: usize, frame: usize, changes: Changes, group: u64, label: &str) {
         if self.open_group == Some(group)
-            && let Some(Entry { cmd: Command::Draw { layer_idx: top_layer, changes: top }, .. }) = self.undo_stack.back_mut()
-            && *top_layer == layer_idx
+            && let Some(Entry { cmd: Command::Draw { layer_idx: top_layer, frame: top_frame, changes: top }, .. }) = self.undo_stack.back_mut()
+            && (*top_layer, *top_frame) == (layer_idx, frame)
         {
             merge_changes(top, changes);
             self.redo_stack.clear();
             self.version += 1;
             return;
         }
-        self.push_as(Command::Draw { layer_idx, changes }, label);
+        self.push_as(Command::Draw { layer_idx, frame, changes }, label);
         self.open_group = Some(group);
     }
 
@@ -134,7 +134,8 @@ fn write_cells(doc: &mut Document, layer_idx: usize, changes: &Changes, new: boo
 
 fn apply_command(cmd: &Command, doc: &mut Document) {
     match cmd {
-        Command::Draw { layer_idx, changes } => {
+        Command::Draw { layer_idx, frame, changes } => {
+            doc.show_frame(*frame);
             write_cells(doc, *layer_idx, changes, true);
         }
         Command::LayerAdd { index, layer } => {
@@ -146,8 +147,8 @@ fn apply_command(cmd: &Command, doc: &mut Document) {
         Command::LayerMove { from, to } => {
             doc.move_layer(*from, *to);
         }
-        Command::LayerMergeDown { upper, changes, .. } => {
-            write_cells(doc, upper - 1, changes, true);
+        Command::LayerMergeDown { upper, merged, .. } => {
+            doc.replace_layer(upper - 1, merged.clone());
             doc.take_layer(*upper);
             doc.active_layer = upper - 1;
         }
@@ -159,13 +160,20 @@ fn apply_command(cmd: &Command, doc: &mut Document) {
         Command::Resize { new_size, .. } => {
             doc.resize(new_size.0, new_size.1);
         }
+        Command::FrameAdd { index, data } => doc.insert_frame(*index, data.clone()),
+        Command::FrameRemove { index, .. } => {
+            doc.take_frame(*index);
+        }
+        Command::FrameMove { from, to } => doc.move_frame(*from, *to),
+        Command::FrameTiming { new, .. } => doc.durations = new.clone(),
     }
     doc.modified = true;
 }
 
 fn apply_inverse(cmd: &Command, doc: &mut Document) {
     match cmd {
-        Command::Draw { layer_idx, changes } => {
+        Command::Draw { layer_idx, frame, changes } => {
+            doc.show_frame(*frame);
             write_cells(doc, *layer_idx, changes, false);
         }
         Command::LayerAdd { index, .. } => {
@@ -178,8 +186,8 @@ fn apply_inverse(cmd: &Command, doc: &mut Document) {
         Command::LayerMove { from, to } => {
             doc.move_layer(*to, *from);
         }
-        Command::LayerMergeDown { upper, layer, changes } => {
-            write_cells(doc, upper - 1, changes, false);
+        Command::LayerMergeDown { upper, layer, below, .. } => {
+            doc.replace_layer(upper - 1, below.clone());
             doc.insert_layer(*upper, layer.clone());
         }
         Command::LayerRename { index, old, .. } => {
@@ -188,11 +196,19 @@ fn apply_inverse(cmd: &Command, doc: &mut Document) {
             }
         }
         Command::Resize { old_size, old_layers, .. } => {
-            doc.layers = old_layers.clone();
             doc.width = old_size.0;
             doc.height = old_size.1;
+            for (i, layer) in old_layers.iter().enumerate() {
+                doc.replace_layer(i, layer.clone());
+            }
             doc.active_layer = doc.active_layer.min(doc.layers.len() - 1);
         }
+        Command::FrameAdd { index, .. } => {
+            doc.take_frame(*index);
+        }
+        Command::FrameRemove { index, data } => doc.insert_frame(*index, data.clone()),
+        Command::FrameMove { from, to } => doc.move_frame(*to, *from),
+        Command::FrameTiming { old, .. } => doc.durations = old.clone(),
     }
     doc.modified = true;
 }

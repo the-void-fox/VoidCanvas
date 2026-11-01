@@ -1,9 +1,11 @@
-use crate::document::{Changes, Layer};
+use crate::document::{Changes, FrameData, Layer};
 
 #[derive(Clone, Debug)]
 pub enum Command {
     Draw {
         layer_idx: usize,
+        /// The animation frame drawn on; undo goes back to it.
+        frame: usize,
         changes: Changes,
     },
     /// Also used for "Duplicate layer".
@@ -19,11 +21,12 @@ pub enum Command {
         from: usize,
         to: usize,
     },
-    /// Bakes the layer at `upper` into the layer below it and removes it.
+    /// Bakes the layer at `upper` into the layer below it (in every frame) and removes it.
     LayerMergeDown {
         upper: usize,
         layer: Layer,
-        changes: Changes,
+        below: Layer,
+        merged: Layer,
     },
     LayerRename {
         index: usize,
@@ -34,6 +37,23 @@ pub enum Command {
         old_size: (usize, usize),
         new_size: (usize, usize),
         old_layers: Vec<Layer>,
+    },
+    /// Also used for "Duplicate Frame".
+    FrameAdd {
+        index: usize,
+        data: FrameData,
+    },
+    FrameRemove {
+        index: usize,
+        data: FrameData,
+    },
+    FrameMove {
+        from: usize,
+        to: usize,
+    },
+    FrameTiming {
+        old: Vec<u32>,
+        new: Vec<u32>,
     },
 }
 
@@ -48,6 +68,10 @@ impl Command {
             Command::LayerMergeDown { .. } => "Merge Down",
             Command::LayerRename { .. }    => "Rename Layer",
             Command::Resize { .. }         => "Resize Canvas",
+            Command::FrameAdd { .. }       => "New Frame",
+            Command::FrameRemove { .. }    => "Delete Frame",
+            Command::FrameMove { .. }      => "Move Frame",
+            Command::FrameTiming { .. }    => "Frame Timing",
         }
     }
 }

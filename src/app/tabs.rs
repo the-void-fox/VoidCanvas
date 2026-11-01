@@ -55,9 +55,11 @@ impl AsciiArtEditor {
         mem::swap(&mut self.history, &mut tab.history);
         mem::swap(&mut self.tools.selection, &mut tab.selection);
         mem::swap(&mut self.autosaved_version, &mut tab.autosaved_version);
-        let grid = self.canvas_state.show_grid;
+        let (grid, onion) = (self.canvas_state.show_grid, self.canvas_state.onion_skin);
         mem::swap(&mut self.canvas_state, &mut tab.canvas_state);
         self.canvas_state.show_grid = grid;
+        self.canvas_state.onion_skin = onion;
+        self.stop_playback();
         self.tools.text.stop();
         self.layer_panel.rename_idx = None;
     }

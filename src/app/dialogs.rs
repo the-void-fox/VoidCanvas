@@ -119,6 +119,9 @@ impl AsciiArtEditor {
                                 ("Ctrl+O", "Open…"),
                                 ("Ctrl+S", "Save"),
                                 ("Ctrl+Shift+S", "Save as…"),
+                                ("Ctrl+W", "Close tab"),
+                                ("Ctrl+Tab (+Shift)", "Next (previous) tab"),
+                                ("Ctrl+Shift+P, F1", "Command palette"),
                             ]),
                             ("Edit", &[
                                 ("Ctrl+Z", "Undo"),
@@ -134,7 +137,7 @@ impl AsciiArtEditor {
                             ("Tools", &[
                                 ("S", "Select"),
                                 ("B  P  G", "Brush, pixel, shade"),
-                                ("E  F  I", "Eraser, fill, eyedropper"),
+                                ("E  F  U  I", "Eraser, fill, gradient, eyedropper"),
                                 ("T", "Text"),
                                 ("L  R  O  D", "Line, rect, ellipse, border"),
                                 ("[  ]  or  –  +", "Brush size"),
@@ -148,9 +151,15 @@ impl AsciiArtEditor {
                                 ("Ctrl+0", "Fit to window"),
                                 ("Ctrl+1", "Actual size"),
                             ]),
+                            ("Animation", &[
+                                ("Enter", "Play / stop"),
+                                (",  /  .", "Previous / next frame"),
+                            ]),
                         ];
+                        // File and Edit on the left, the rest on the right.
+                        let (left, right) = SHORTCUTS.split_at(2);
                         ui.columns(2, |columns| {
-                            for (column, sections) in columns.iter_mut().zip(SHORTCUTS.chunks(2)) {
+                            for (column, sections) in columns.iter_mut().zip([left, right]) {
                                 egui::Grid::new(("shortcuts_grid", sections[0].0))
                                     .num_columns(2)
                                     .spacing([18.0, 5.0])

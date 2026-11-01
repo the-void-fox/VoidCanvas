@@ -16,6 +16,7 @@ use crate::tools::{
     pixel::{PixelTool, halves},
     shade::{RAMPS, ShadeTool},
 };
+mod animation;
 pub(crate) mod banner;
 mod chrome;
 pub(crate) mod commands;
@@ -130,6 +131,7 @@ pub struct AsciiArtEditor {
     pub(crate) command_palette: Option<commands::CommandPalette>,
     /// One entry per tab; the one in front is `None`, its document lives in the fields above.
     tabs: Vec<Option<tabs::Tab>>,
+    pub(crate) playback: animation::Playback,
     active_tab: usize,
     /// Folder of the last file chosen; the built-in chooser starts there.
     pub(crate) last_dir: Option<std::path::PathBuf>,
@@ -182,6 +184,7 @@ impl Default for AsciiArtEditor {
             file_browser:   None,
             command_palette: None,
             tabs:           vec![None],
+            playback:       animation::Playback::default(),
             active_tab:     0,
             last_dir:       None,
             system_dialog_failed: cfg!(test),
@@ -222,7 +225,7 @@ impl AsciiArtEditor {
     /// Records changes that were already applied to the active layer.
     fn commit_draw(&mut self, changes: Changes, label: &str) {
         if changes.is_empty() { return; }
-        self.history.push_as(Command::Draw { layer_idx: self.doc.active_layer, changes }, label);
+        self.history.push_as(Command::Draw { layer_idx: self.doc.active_layer, frame: self.doc.frame, changes }, label);
         self.doc.modified = true;
     }
 
@@ -239,6 +242,7 @@ impl AsciiArtEditor {
         match event {
             CanvasEvent::Press { x, y, primary, mods, lower } => {
                 if self.drawing { return; }
+                self.stop_playback();
                 self.nudge_group += 1;
                 let tool = self.active_tool;
                 self.last_primary = primary;
@@ -455,7 +459,7 @@ impl AsciiArtEditor {
             }
         }
         if !changes.is_empty() {
-            self.history.push_grouped(self.doc.active_layer, changes, self.tools.text.group, "Typing");
+            self.history.push_grouped(self.doc.active_layer, self.doc.frame, changes, self.tools.text.group, "Typing");
             self.doc.modified = true;
         }
     }
@@ -593,6 +597,14 @@ impl AsciiArtEditor {
         if swap { self.swap_slots(); }
         if delete && !self.drawing { self.delete_selection(); }
         if deselect && !self.drawing { self.tools.selection.selection = None; }
+
+        let (prev_frame, next_frame, play) = ctx.input(|i| {
+            if i.modifiers.any() { return (false, false, false); }
+            (i.key_pressed(Key::Comma), i.key_pressed(Key::Period), i.key_pressed(Key::Enter))
+        });
+        if prev_frame { self.run(Action::PrevFrame, ctx); }
+        if next_frame { self.run(Action::NextFrame, ctx); }
+        if play { self.run(Action::Play, ctx); }
     }
 
     // ── Clipboard ────────────────────────────────────────────────────────────
@@ -683,7 +695,7 @@ impl AsciiArtEditor {
         if self.active_layer_locked() { return; }
         let changes = self.tools.selection.nudge(&mut self.doc, dx, dy);
         if !changes.is_empty() {
-            self.history.push_grouped(self.doc.active_layer, changes, self.nudge_group, "Move");
+            self.history.push_grouped(self.doc.active_layer, self.doc.frame, changes, self.nudge_group, "Move");
             self.doc.modified = true;
         }
     }
@@ -741,9 +753,10 @@ impl AsciiArtEditor {
                     return;
                 }
                 Command::LayerMergeDown {
-                    upper:   active,
-                    layer:   self.doc.active_layer().clone(),
-                    changes: self.doc.merge_down_changes(active),
+                    upper:  active,
+                    layer:  self.doc.active_layer().clone(),
+                    below:  self.doc.layers[active - 1].clone(),
+                    merged: self.doc.merged_down(active),
                 }
             }
             LayerAction::MoveUp => {
@@ -772,7 +785,7 @@ impl AsciiArtEditor {
         let changes = self.doc.active_layer().clear_changes();
         if changes.is_empty() { return; }
         let layer_idx = self.doc.active_layer;
-        self.history.execute_as(Command::Draw { layer_idx, changes }, "Clear Layer", &mut self.doc);
+        self.history.execute_as(Command::Draw { layer_idx, frame: self.doc.frame, changes }, "Clear Layer", &mut self.doc);
     }
 
     fn resize_canvas(&mut self, width: usize, height: usize) {
@@ -898,6 +911,7 @@ impl eframe::App for AsciiArtEditor {
         self.handle_dropped_files(&ctx);
         self.autosave(&ctx);
         self.handle_keyboard(&ctx);
+        self.advance_playback(&ctx);
         self.new_doc_dialog(&ctx);
         self.resize_dialog(&ctx);
         self.about_dialog(&ctx);
@@ -920,6 +934,7 @@ impl eframe::App for AsciiArtEditor {
         self.tool_strip(ui);
         self.dock(ui);
         self.tab_bar(ui);
+        self.timeline(ui);
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(theme::BG_DEEP))

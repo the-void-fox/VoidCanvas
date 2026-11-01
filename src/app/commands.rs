@@ -21,6 +21,14 @@ pub enum Action {
     NextTab,
     PrevTab,
     SwitchTab(usize),
+    NewFrame,
+    NewEmptyFrame,
+    DeleteFrame,
+    PrevFrame,
+    NextFrame,
+    MoveFrame(isize),
+    Play,
+    ToggleOnionSkin,
     Undo,
     Redo,
     Copy,
@@ -95,6 +103,9 @@ impl AsciiArtEditor {
         add("File", "Export HTML…", "", Action::ChooseFile(FileAction::ExportHtml));
         add("File", "Export PNG…", "", Action::ChooseFile(FileAction::ExportPng { transparent: false }));
         add("File", "Export PNG (Transparent)…", "", Action::ChooseFile(FileAction::ExportPng { transparent: true }));
+        if self.doc.frame_count() > 1 {
+            add("File", "Export GIF…", "", Action::ChooseFile(FileAction::ExportGif));
+        }
         add("File", "Close Tab", "Ctrl+W", Action::CloseTab);
         add("File", "Quit", "", Action::Quit);
         if self.tab_count() > 1 {
@@ -157,6 +168,20 @@ impl AsciiArtEditor {
         add("Layer", if layer.visible { "Hide Layer" } else { "Show Layer" }, "", Action::Layer(LayerAction::ToggleVisible(active)));
         add("Layer", if layer.locked { "Unlock Layer" } else { "Lock Layer" }, "", Action::Layer(LayerAction::ToggleLock(active)));
 
+        let frames = self.doc.frame_count();
+        add("Frame", "New Frame (Copy)", "", Action::NewFrame);
+        add("Frame", "New Empty Frame", "", Action::NewEmptyFrame);
+        if frames > 1 {
+            add("Frame", "Delete Frame", "", Action::DeleteFrame);
+            add("Frame", "Previous Frame", ",", Action::PrevFrame);
+            add("Frame", "Next Frame", ".", Action::NextFrame);
+            add("Frame", if self.playback.playing { "Stop" } else { "Play" }, "Enter", Action::Play);
+            if self.doc.frame > 0 { add("Frame", "Move Frame Left", "", Action::MoveFrame(-1)); }
+            if self.doc.frame + 1 < frames { add("Frame", "Move Frame Right", "", Action::MoveFrame(1)); }
+        }
+        let onion = if self.canvas_state.onion_skin { "Hide Onion Skin" } else { "Show Onion Skin" };
+        add("Frame", onion, "", Action::ToggleOnionSkin);
+
         add("Help", "Keyboard Shortcuts", "", Action::Shortcuts);
         add("Help", "Author", "", Action::Author);
         list
@@ -178,6 +203,14 @@ impl AsciiArtEditor {
             Action::NextTab => self.cycle_tab(1),
             Action::PrevTab => self.cycle_tab(-1),
             Action::SwitchTab(i) => self.switch_tab(i),
+            Action::NewFrame => self.add_frame(false),
+            Action::NewEmptyFrame => self.add_frame(true),
+            Action::DeleteFrame => self.delete_frame(),
+            Action::PrevFrame => self.step_frame(-1),
+            Action::NextFrame => self.step_frame(1),
+            Action::MoveFrame(step) => self.move_frame(step),
+            Action::Play => self.toggle_playback(),
+            Action::ToggleOnionSkin => self.canvas_state.onion_skin = !self.canvas_state.onion_skin,
             Action::Undo => {
                 if !self.drawing && self.history.undo(&mut self.doc) { self.show_status("Undo"); }
             }

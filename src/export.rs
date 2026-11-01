@@ -19,6 +19,26 @@ pub const CELL_W: f32 = 10.0;
 /// A cell is exactly one glyph advance wide and one line high, so block and
 /// box-drawing characters of neighbouring cells touch without seams.
 pub fn render_png(doc: &Document, transparent: bool) -> Result<RgbaImage, String> {
+    render_frame(doc, doc.frame, transparent)
+}
+
+/// An animated GIF of every frame, looping forever.
+pub fn write_gif(doc: &Document, path: &std::path::Path) -> Result<(), String> {
+    use image::codecs::gif::{GifEncoder, Repeat};
+    use image::{Delay, Frame};
+    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let mut encoder = GifEncoder::new_with_speed(std::io::BufWriter::new(file), 10);
+    encoder.set_repeat(Repeat::Infinite).map_err(|e| e.to_string())?;
+    for (frame, &ms) in doc.durations.iter().enumerate() {
+        let image = render_frame(doc, frame, false)?;
+        let delay = Delay::from_numer_denom_ms(ms, 1);
+        encoder.encode_frame(Frame::from_parts(image, 0, 0, delay)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// One animation frame as an image.
+pub fn render_frame(doc: &Document, frame: usize, transparent: bool) -> Result<RgbaImage, String> {
     let font = FontRef::try_from_slice(FONT).map_err(|e| format!("font error: {e}"))?;
 
     // At a 1 px scale a line is exactly 1 px high, so the advance is the width : height ratio.
@@ -35,7 +55,7 @@ pub fn render_png(doc: &Document, transparent: bool) -> Result<RgbaImage, String
 
     for cy in 0..doc.height {
         for cx in 0..doc.width {
-            let cell = doc.composite_cell(cx, cy);
+            let cell = doc.composite_in(frame, cx, cy);
             let (px, py) = (cx as u32 * cell_w, cy as u32 * cell_h);
 
             if !cell.bg.is_transparent() {

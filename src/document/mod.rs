@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 pub use cell::{Cell, Color};
 pub use layer::Layer;
-pub use document::Document;
+pub use document::{Document, FrameData};
 
 /// Cell edits keyed by position: (before, after).
 pub type Changes = HashMap<(usize, usize), (Cell, Cell)>;
