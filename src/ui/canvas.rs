@@ -80,10 +80,13 @@ impl CanvasState {
     }
 
     pub fn cell_rect(&self, x: usize, y: usize, canvas_origin: Pos2) -> Rect {
+        // Both edges come from the same formula as the neighbours' edges, so after snapping
+        // to pixels neighbouring cells share their border exactly (`min + size` can round
+        // differently and leave a one-pixel seam).
         let cs = self.cell_size();
         let base = canvas_origin + self.offset;
-        let min = base + Vec2::new(x as f32 * cs.x, y as f32 * cs.y);
-        Rect::from_min_size(min, cs)
+        let edge = |x: usize, y: usize| base + Vec2::new(x as f32 * cs.x, y as f32 * cs.y);
+        Rect::from_min_max(edge(x, y), edge(x + 1, y + 1))
     }
 
     /// Where cell (x, y) was on screen in the last frame.
