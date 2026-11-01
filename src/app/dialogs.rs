@@ -125,6 +125,7 @@ impl AsciiArtEditor {
                                 ("Ctrl+Y, Ctrl+Shift+Z", "Redo"),
                                 ("Ctrl+C / X / V", "Copy / cut / paste"),
                                 ("Ctrl+A  /  Ctrl+D", "Select all / deselect"),
+                                ("Ctrl+H", "Replace glyphs / colours"),
                                 ("Delete", "Delete selection"),
                                 ("H  /  V", "Flip selection"),
                                 ("Arrows (+Shift)", "Move selection 1 (5)"),
@@ -132,7 +133,8 @@ impl AsciiArtEditor {
                             ]),
                             ("Tools", &[
                                 ("S", "Select"),
-                                ("B  E  F  I", "Brush, eraser, fill, eyedropper"),
+                                ("B  P  G", "Brush, pixel, shade"),
+                                ("E  F  I", "Eraser, fill, eyedropper"),
                                 ("T", "Text"),
                                 ("L  R  O  D", "Line, rect, ellipse, border"),
                                 ("[  ]  or  –  +", "Brush size"),

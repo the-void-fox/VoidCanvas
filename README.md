@@ -10,16 +10,19 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 
 | Category | Details |
 |---|---|
-| **Tools** | Select, Brush, Eraser, Flood Fill, Eyedropper, Text, Line, Rectangle, Ellipse, Border Box — left button uses the primary slot, right button the secondary; Shift / Alt square or centre shapes |
+| **Tools** | Select, Brush, Pixel, Shade, Eraser, Flood Fill, Eyedropper, Text, Line, Rectangle, Ellipse, Border Box — left button uses the primary slot, right button the secondary; Shift / Alt square or centre shapes |
+| **ASCII art** | **Pixel** paints square pixels as half blocks (`▀▄█`, two per cell); **Shade** steps density (`░▒▓█`, ` .:-=+*#%@`); box lines and borders **join automatically** (`├ ┬ ┼`, double lines too); **symmetry** mirrors strokes and turns glyphs to match |
+| **Pictures** | Import PNG / JPEG / GIF / WebP as half blocks, ASCII, shades or braille — colour or mono, dithering, brightness / contrast, live preview |
+| **Banners** | Big FIGlet letters (Standard, Small, Slant, Big, Shadow, Mini, Banner) |
 | **Paint channels** | Glyph / Fore / Back toggles: paint, fill, erase or pick only the character, only the colour, or only the background |
 | **Selection** | Move by dragging or with the arrow keys, glyph-aware Flip / Rotate (`/` ↔ `\`, `┌` ↔ `┐`, `▌` ↔ `▐`, …) |
 | **Layers** | Add / Remove / Duplicate / Merge Down / Reorder / Rename / Lock / Hide |
 | **History** | 100-step Undo / Redo for everything, with a History panel to jump to any step |
-| **Glyphs** | 18 palettes (Lines, Blocks, Math, Greek, Arrows, Nerd icons, …); search by name, code point (`U+2588`) or any typed character |
-| **Colors** | Primary & secondary glyph / background slots, live RGBA picker, hex input, 24-colour palette |
+| **Glyphs** | 21 sets (Lines, Box, Blocks, Braille, Sextants, Math, Greek, Arrows, Nerd icons, …), recent glyphs; search by name, code point (`U+2588`) or any typed character |
+| **Colors** | Primary & secondary foreground / background slots, live RGBA picker, hex input, recent colours, VGA / xterm 256 / PICO-8 / Game Boy palettes; Replace (Ctrl+H) recolours or swaps glyphs across a layer |
 | **Canvas** | Terminal-style 1:2 cells; box-drawing, block and braille characters are drawn as shapes so they join seamlessly at any zoom; fit / 100 % zoom, optional grid |
 | **Clipboard** | Copy / cut / paste selections, also as plain text to and from other programs |
-| **Files** | Native `.vc` format (JSON), `.txt` import / export, **PNG** export (opaque or transparent), recent files, drag & drop, autosave with crash recovery |
+| **Files** | Native `.vc` format (JSON), `.txt` import / export, **ANSI** (24-bit colour) and **HTML** export, **PNG** export (opaque or transparent), copy as text / ANSI, recent files, drag & drop, autosave with crash recovery |
 
 ---
 
@@ -65,6 +68,7 @@ cargo build --release
 | `Ctrl+X` | Cut selection |
 | `Ctrl+V` | Paste at cursor (text copied from other apps works too) |
 | `Ctrl+A` / `Ctrl+D` | Select all / deselect |
+| `Ctrl+H` | Replace glyphs / colours |
 | `Delete` | Delete selection |
 | `Escape` | Deselect |
 | `H` / `V` | Flip selection horizontally / vertically |
@@ -78,6 +82,8 @@ cargo build --release
 | `S` | Select |
 | `B` | Brush |
 | `E` | Eraser |
+| `P` | Pixel (half-block pixels) |
+| `G` | Shade (right button: lighter) |
 | `F` | Flood Fill |
 | `I` | Eyedropper (or `Alt`+click with any drawing tool) |
 | `T` | Text (click, type; `Enter` next line, `Esc` done) |
@@ -134,13 +140,20 @@ src/
 ├── main.rs              Entry point, window setup
 ├── theme.rs             Colours, fonts and spacing of the "Void" look
 ├── icons.rs             Material Design Icons from the bundled Nerd Font
-├── export.rs            PNG rendering
+├── glyphs.rs            Box-drawing structure, glyph-aware flip / rotate
+├── convert.rs           Picture → character art
+├── figlet.rs            FIGlet banner fonts
+├── export.rs            PNG / ANSI / HTML export
 ├── tests.rs             Model / history tests + headless UI tests (egui_kittest)
 ├── dev.rs               Debug-only helpers (VOID_CANVAS_SCREENSHOT=out.png)
 ├── app/
 │   ├── mod.rs           Editor state, input, editing operations
 │   ├── chrome.rs        Menu, tool options bar, tool strip, dock, status bar
-│   ├── dialogs.rs       New / Resize / About / unsaved-changes dialogs
+│   ├── dialogs.rs       New / Resize / About / unsaved-changes / recovery dialogs
+│   ├── import.rs        Import Image dialog
+│   ├── replace.rs       Replace dialog
+│   ├── banner.rs        Insert Banner dialog
+│   ├── storage.rs       Settings, recent files, autosave
 │   └── file_io.rs       Open, save, export
 ├── document/
 │   ├── cell.rs          Cell & Color types, compositing
@@ -149,7 +162,7 @@ src/
 ├── history/
 │   ├── commands.rs      Command enum
 │   └── mod.rs           Undo / Redo stack
-├── tools/               Brush, eraser, fill, shapes, border box, selection
+├── tools/               Brush, pixel, shade, eraser, fill, text, shapes, selection
 └── ui/
     ├── canvas.rs         Canvas rendering & input
     ├── glyph_render.rs   Box-drawing / block / braille characters as shapes
@@ -177,6 +190,7 @@ To re-render the README screenshot offscreen:
 | [ab_glyph](https://crates.io/crates/ab_glyph) | Font rasterisation for PNG export |
 | [egui_kittest](https://crates.io/crates/egui_kittest) | Headless UI tests (dev only) |
 
+Banner fonts come from [FIGlet](http://www.figlet.org/) (BSD licence, see `src/assets/figlet/LICENSE`).
 Fonts: [Fira Code](https://github.com/tonsky/FiraCode) (Nerd Font build) for the canvas and icons,
 [Inter](https://github.com/rsms/inter) for the interface — both under the SIL Open Font License.
 
