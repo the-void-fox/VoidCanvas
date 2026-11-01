@@ -576,6 +576,47 @@ mod ui {
         assert_eq!((cell.fg.r, cell.bg.b), (255, 255), "red on top, blue below");
     }
 
+    /// egui warns (and outlines widgets in red in debug builds) when a widget keeps its
+    /// place but changes its id between frames; that also loses hover and click state.
+    #[test]
+    fn widgets_keep_their_ids_while_the_ui_changes() {
+        let warnings = capture_warnings();
+        let mut harness = harness();
+        let canvas = cell_pos(&harness, 5, 5);
+        let status_corner = egui::pos2(1390.0, 892.0);
+        for tool in ToolType::groups().iter().flat_map(|g| g.iter()) {
+            harness.state_mut().active_tool = *tool;
+            for pos in [canvas, status_corner, canvas] {
+                harness.hover_at(pos);
+                harness.step();
+            }
+        }
+        let changed: Vec<String> = warnings.lock().unwrap().iter().filter(|w| w.contains("changed id")).cloned().collect();
+        assert!(changed.is_empty(), "{changed:#?}");
+    }
+
+    /// Collects `log` warnings from now on (one logger for the whole test run).
+    fn capture_warnings() -> &'static std::sync::Mutex<Vec<String>> {
+        struct Capture;
+        static LINES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        impl log::Log for Capture {
+            fn enabled(&self, metadata: &log::Metadata) -> bool {
+                metadata.level() <= log::Level::Warn
+            }
+            fn log(&self, record: &log::Record) {
+                if self.enabled(record.metadata()) {
+                    LINES.lock().unwrap().push(record.args().to_string());
+                }
+            }
+            fn flush(&self) {}
+        }
+        static LOGGER: Capture = Capture;
+        if log::set_logger(&LOGGER).is_ok() {
+            log::set_max_level(log::LevelFilter::Warn);
+        }
+        &LINES
+    }
+
     #[test]
     fn dialogs_and_dock_tabs_render() {
         let mut harness = harness();

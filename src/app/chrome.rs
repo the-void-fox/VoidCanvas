@@ -297,7 +297,9 @@ impl AsciiArtEditor {
                         hint(ui, "Right button: secondary slot · Alt+click: pick");
                     }
 
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    // An explicit id keeps the ids of these widgets the same whatever the
+                    // tool-specific controls to the left are (otherwise hover state is lost).
+                    ui.scope_builder(UiBuilder::new().id(Id::new("options_right")).layout(Layout::right_to_left(Align::Center)), |ui| {
                         let grid = self.canvas_state.show_grid;
                         let icon = if grid { icons::GRID } else { icons::GRID_OFF };
                         if icon_toggle(ui, icon, 26.0, grid, "Show grid").clicked() {
@@ -490,7 +492,8 @@ impl AsciiArtEditor {
                     if !layer.visible { text.push_str("  (hidden)"); }
                     ui.label(dim(text));
 
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    // Stable ids: the left part grows and shrinks as the pointer moves.
+                    ui.scope_builder(UiBuilder::new().id(Id::new("status_right")).layout(Layout::right_to_left(Align::Center)), |ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         if icon_button(ui, icons::ZOOM_IN, 20.0, false, "Zoom in  (Ctrl +)").clicked() {
                             self.canvas_state.zoom_view_center(1.25);

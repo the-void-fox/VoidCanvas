@@ -18,3 +18,4 @@ lto = true
 
 [dev-dependencies]
 egui_kittest = { version = "0.35", features = ["eframe", "wgpu"] }
+log = "0.4"
