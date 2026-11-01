@@ -59,6 +59,8 @@ impl AsciiArtEditor {
                         if ui.button("Import Image…").clicked() { self.choose_image_to_import(); }
                         ui.separator();
                         if ui.button("Export Text…").clicked() { self.export_text(); }
+                        if ui.button("Export ANSI…").clicked() { self.export_ansi(); }
+                        if ui.button("Export HTML…").clicked() { self.export_html(); }
                         if ui.button("Export PNG…").clicked() { self.export_png(false); }
                         if ui.button("Export PNG (Transparent)…").clicked() { self.export_png(true); }
                         ui.separator();
@@ -85,6 +87,15 @@ impl AsciiArtEditor {
                         if ui.add_enabled(self.clipboard.is_some(), Button::new("Paste").shortcut_text("Ctrl+V")).clicked() {
                             self.paste(None);
                         }
+                        ui.menu_button("Copy As", |ui| {
+                            let what = if has_selection { "selection" } else { "whole picture" };
+                            if ui.button("Plain Text").on_hover_text(format!("Copies the {what}")).clicked() {
+                                self.copy_as(&ctx, false);
+                            }
+                            if ui.button("ANSI Colours").on_hover_text(format!("Copies the {what} with terminal colour codes")).clicked() {
+                                self.copy_as(&ctx, true);
+                            }
+                        });
                         if ui.add_enabled(has_selection, Button::new("Delete").shortcut_text("Del")).clicked() {
                             self.delete_selection();
                         }

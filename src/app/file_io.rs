@@ -1,26 +1,36 @@
 //! Saving, opening and exporting files.
 
 use super::{AsciiArtEditor, storage};
+use crate::export;
 use crate::document::{Color, Document};
 use crate::tools::selection::text_to_content;
 
 impl AsciiArtEditor {
-    pub(super) fn export_text(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Text", &["txt"])
-            .save_file()
-        {
-            let mut path = path;
-            if path.extension().is_none_or(|ext| ext != "txt") {
-                path.set_extension("txt");
-            }
-            let text = self.doc.to_text();
-            if std::fs::write(&path, text).is_ok() {
-                self.show_status(format!("Exported to {:?}", path));
-            } else {
-                self.show_status("Export failed!");
-            }
+    /// Asks where to save `contents` as a `kind` file with extension `ext`.
+    fn export_string(&mut self, kind: &str, ext: &str, contents: String) {
+        let Some(mut path) = rfd::FileDialog::new().add_filter(kind, &[ext]).save_file() else { return };
+        if path.extension().is_none_or(|e| e != ext) {
+            path.set_extension(ext);
         }
+        match std::fs::write(&path, contents) {
+            Ok(()) => self.show_status(format!("Exported {kind}: {}", path.display())),
+            Err(e) => self.show_status(format!("Export failed: {e}")),
+        }
+    }
+
+    pub(super) fn export_text(&mut self) {
+        let text = export::to_text(&self.doc, export::whole(&self.doc));
+        self.export_string("Text", "txt", text);
+    }
+
+    pub(super) fn export_ansi(&mut self) {
+        let ansi = export::to_ansi(&self.doc, export::whole(&self.doc));
+        self.export_string("ANSI", "ans", ansi);
+    }
+
+    pub(super) fn export_html(&mut self) {
+        let html = export::to_html(&self.doc, &self.doc_name());
+        self.export_string("HTML", "html", html);
     }
 
     pub(super) fn export_png(&mut self, transparent: bool) {

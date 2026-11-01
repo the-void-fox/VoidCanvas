@@ -138,3 +138,92 @@ fn blend_over(dst: &mut Rgba<u8>, src: &Color, coverage: f32) {
         (out_a * 255.0).round() as u8,
     ]);
 }
+
+/// Cells `x0..x1` × `y0..y1` of the composited document, as they look.
+fn visible_rows(doc: &Document, (x0, y0, x1, y1): (usize, usize, usize, usize)) -> Vec<Vec<crate::document::Cell>> {
+    (y0..y1.min(doc.height)).map(|y| (x0..x1.min(doc.width)).map(|x| doc.composite_cell(x, y)).collect()).collect()
+}
+
+/// The whole document as a region for [`to_ansi`] / [`to_html`].
+pub fn whole(doc: &Document) -> (usize, usize, usize, usize) {
+    (0, 0, doc.width, doc.height)
+}
+
+/// Plain text of a region, trailing spaces trimmed.
+pub fn to_text(doc: &Document, region: (usize, usize, usize, usize)) -> String {
+    let lines: Vec<String> = visible_rows(doc, region)
+        .iter()
+        .map(|row| row.iter().map(|c| c.ch).collect::<String>().trim_end().to_string())
+        .collect();
+    lines.join("\n").trim_end_matches('\n').to_string()
+}
+
+/// Text with 24-bit ANSI colours, for terminals (`cat art.ans`). Colour codes are only
+/// emitted when they change; empty cells at the end of a line are dropped.
+pub fn to_ansi(doc: &Document, region: (usize, usize, usize, usize)) -> String {
+    let mut out = String::new();
+    for row in visible_rows(doc, region) {
+        let end = row.iter().rposition(|c| !c.is_empty()).map_or(0, |i| i + 1);
+        let (mut fg, mut bg): (Option<Color>, Option<Color>) = (None, None);
+        for cell in &row[..end] {
+            let want_bg = (!cell.bg.is_transparent()).then(|| cell.bg.clone());
+            if want_bg != bg {
+                match &want_bg {
+                    Some(c) => out.push_str(&format!("\x1b[48;2;{};{};{}m", c.r, c.g, c.b)),
+                    None => out.push_str("\x1b[49m"),
+                }
+                bg = want_bg;
+            }
+            if cell.ch != ' ' && fg.as_ref() != Some(&cell.fg) {
+                let c = &cell.fg;
+                out.push_str(&format!("\x1b[38;2;{};{};{}m", c.r, c.g, c.b));
+                fg = Some(cell.fg.clone());
+            }
+            out.push(cell.ch);
+        }
+        if fg.is_some() || bg.is_some() {
+            out.push_str("\x1b[0m");
+        }
+        out.push('\n');
+    }
+    while out.ends_with("\n\n") {
+        out.pop();
+    }
+    out
+}
+
+/// A standalone HTML page showing the art in a `<pre>` block.
+pub fn to_html(doc: &Document, title: &str) -> String {
+    let hex = |c: &Color| format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b);
+    let escape = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let mut body = String::new();
+    for row in visible_rows(doc, whole(doc)) {
+        // Runs of cells with the same colours become one <span>.
+        let mut i = 0;
+        while i < row.len() {
+            let style = |c: &crate::document::Cell| {
+                let fg = if c.ch == ' ' { String::new() } else { format!("color:{};", hex(&c.fg)) };
+                let bg = if c.bg.is_transparent() { String::new() } else { format!("background:{};", hex(&c.bg)) };
+                fg + &bg
+            };
+            let current = style(&row[i]);
+            let mut text = String::new();
+            while i < row.len() && (style(&row[i]) == current || (row[i].ch == ' ' && row[i].bg.is_transparent() && current.is_empty())) {
+                text.push(row[i].ch);
+                i += 1;
+            }
+            if current.is_empty() {
+                body.push_str(&escape(&text));
+            } else {
+                body.push_str(&format!("<span style=\"{current}\">{}</span>", escape(&text)));
+            }
+        }
+        body.push('\n');
+    }
+    format!(
+        "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n</head>\n\
+         <body style=\"background:#000;margin:2em\">\n\
+         <pre style=\"color:#fff;font:16px/1.25 'Fira Code','DejaVu Sans Mono',monospace;margin:0\">\n{body}</pre>\n</body>\n</html>\n",
+        escape(title)
+    )
+}

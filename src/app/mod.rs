@@ -547,6 +547,22 @@ impl AsciiArtEditor {
         true
     }
 
+    /// Copies the selection (or the whole picture) as plain text or ANSI-coloured text.
+    fn copy_as(&mut self, ctx: &egui::Context, ansi: bool) {
+        let region = match self.tools.selection.selection {
+            Some((x1, y1, x2, y2)) => (x1, y1, x2 + 1, y2 + 1),
+            None => crate::export::whole(&self.doc),
+        };
+        let text = if ansi {
+            crate::export::to_ansi(&self.doc, region)
+        } else {
+            crate::export::to_text(&self.doc, region)
+        };
+        ctx.copy_text(text);
+        let what = if self.tools.selection.selection.is_some() { "selection" } else { "picture" };
+        self.show_status(format!("Copied the {what} as {}", if ansi { "ANSI" } else { "text" }));
+    }
+
     fn cut(&mut self, ctx: &egui::Context) {
         if self.tools.selection.selection.is_none() {
             self.show_status("Nothing selected");

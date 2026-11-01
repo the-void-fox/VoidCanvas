@@ -128,20 +128,4 @@ impl Document {
         self.height = new_h;
         self.modified = true;
     }
-
-    pub fn to_text(&self) -> String {
-        let mut lines: Vec<String> = (0..self.height)
-            .map(|y| {
-                let line: String = (0..self.width)
-                    .map(|x| self.composite_cell(x, y).ch)
-                    .collect();
-                line.trim_end().to_string()
-            })
-            .collect();
-
-        while lines.last().map(|l: &String| l.is_empty()).unwrap_or(false) {
-            lines.pop();
-        }
-        lines.join("\n")
-    }
 }

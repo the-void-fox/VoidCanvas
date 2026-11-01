@@ -460,7 +460,7 @@ mod ui {
 
         let doc = &harness.state().doc;
         assert_eq!((doc.width, doc.height), (7, 3));
-        assert_eq!(doc.to_text(), "/\\_/\\\n( o.o )\n > ^ <");
+        assert_eq!(crate::export::to_text(doc, crate::export::whole(doc)), "/\\_/\\\n( o.o )\n > ^ <");
         assert!(doc.modified && doc.file_path.is_none(), "an import is a new, unsaved document");
     }
 
@@ -699,6 +699,31 @@ mod glyph_sets {
         use crate::ui::panels::{PALETTES, palette};
         let sizes: Vec<usize> = (0..PALETTES.len()).map(|i| palette(i).len()).collect();
         assert_eq!(&sizes[..4], &[16, 256, 16, 4]);
+    }
+}
+
+mod sharing {
+    use super::{NONE, blue, red};
+    use crate::document::{Cell, Document};
+    use crate::export::{to_ansi, to_html, whole};
+
+    #[test]
+    fn ansi_emits_colours_only_when_they_change() {
+        let mut doc = Document::new(4, 2);
+        doc.layers[0].set(0, 0, Cell::new('A', red(), NONE));
+        doc.layers[0].set(1, 0, Cell::new('B', red(), NONE));
+        doc.layers[0].set(2, 0, Cell::new(' ', red(), blue()));
+        assert_eq!(to_ansi(&doc, whole(&doc)), "\x1b[38;2;255;0;0mAB\x1b[48;2;0;0;255m \x1b[0m\n");
+    }
+
+    #[test]
+    fn html_escapes_and_colours_runs() {
+        let mut doc = Document::new(3, 1);
+        doc.layers[0].set(0, 0, Cell::new('<', red(), NONE));
+        doc.layers[0].set(1, 0, Cell::new('&', red(), NONE));
+        let html = to_html(&doc, "a<b");
+        assert!(html.contains("<title>a&lt;b</title>"));
+        assert!(html.contains("<span style=\"color:#ff0000;\">&lt;&amp;</span> \n"), "{html}");
     }
 }
 
