@@ -22,6 +22,7 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 | **Colors** | Primary & secondary foreground / background slots, live RGBA picker, hex input, recent colours, VGA / xterm 256 / PICO-8 / Game Boy palettes; Replace (Ctrl+H) recolours or swaps glyphs across a layer |
 | **Canvas** | Terminal-style 1:2 cells; box-drawing, block and braille characters are drawn as shapes so they join seamlessly at any zoom; fit / 100 % zoom, optional grid |
 | **Clipboard** | Copy / cut / paste selections, also as plain text to and from other programs |
+| **Command palette** | `Ctrl+Shift+P` / `F1`: fuzzy-search every menu action, tool, layer action, palette and recent file; recently used commands come first |
 | **Files** | Native `.vc` format (JSON), `.txt` import / export, **ANSI** (24-bit colour) and **HTML** export, **PNG** export (opaque or transparent), copy as text / ANSI, recent files, drag & drop, autosave with crash recovery |
 
 ---
@@ -52,6 +53,7 @@ cargo build --release
 
 | Shortcut | Action |
 |---|---|
+| `Ctrl+Shift+P` / `F1` | Command palette |
 | `Ctrl+N` | New document |
 | `Ctrl+O` | Open `.vc` file |
 | `Ctrl+S` | Save |
@@ -150,6 +152,7 @@ src/
 ├── app/
 │   ├── mod.rs           Editor state, input, editing operations
 │   ├── chrome.rs        Menu, tool options bar, tool strip, dock, status bar
+│   ├── commands.rs      Named actions and the command palette
 │   ├── dialogs.rs       New / Resize / About / unsaved-changes / recovery dialogs
 │   ├── import.rs        Import Image dialog
 │   ├── replace.rs       Replace dialog

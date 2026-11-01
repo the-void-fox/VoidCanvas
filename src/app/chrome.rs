@@ -2,7 +2,7 @@
 
 use eframe::egui::{self, *};
 
-use super::{AsciiArtEditor, DockTab, PendingAction, file_dialog::FileAction};
+use super::{AsciiArtEditor, DockTab, PendingAction, commands::Action, file_dialog::FileAction};
 use crate::glyphs::Transform;
 use crate::icons;
 use crate::theme;
@@ -10,7 +10,7 @@ use crate::tools::{ToolType, border::BorderStyle, gradient::GradientShape, shade
 use crate::ui::widgets::{self, color_chip, icon_button, icon_toggle, tab_bar, to_hex, vdivider};
 
 /// Selection transforms with their menu label and shortcut.
-const TRANSFORMS: &[(Transform, &str, &str)] = &[
+pub(super) const TRANSFORMS: &[(Transform, &str, &str)] = &[
     (Transform::FlipHorizontal, "Flip Horizontal", "H"),
     (Transform::FlipVertical, "Flip Vertical", "V"),
     (Transform::RotateCcw, "Rotate 90° Left", ""),
@@ -70,11 +70,11 @@ impl AsciiArtEditor {
                     ui.menu_button("Edit", |ui| {
                         let undo = Button::new("Undo").shortcut_text("Ctrl+Z");
                         if ui.add_enabled(self.history.can_undo(), undo).clicked() {
-                            self.history.undo(&mut self.doc);
+                            self.run(Action::Undo, &ctx);
                         }
                         let redo = Button::new("Redo").shortcut_text("Ctrl+Y");
                         if ui.add_enabled(self.history.can_redo(), redo).clicked() {
-                            self.history.redo(&mut self.doc);
+                            self.run(Action::Redo, &ctx);
                         }
                         ui.separator();
                         let has_selection = self.tools.selection.selection.is_some();
@@ -115,39 +115,25 @@ impl AsciiArtEditor {
                     });
 
                     ui.menu_button("Canvas", |ui| {
-                        if ui.button("Resize…").clicked() {
-                            self.new_width  = self.doc.width;
-                            self.new_height = self.doc.height;
-                            self.show_resize_dialog = true;
-                        }
+                        if ui.button("Resize…").clicked() { self.run(Action::Resize, &ctx); }
                     });
 
                     ui.menu_button("View", |ui| {
-                        if ui.add(Button::new("Zoom In").shortcut_text("Ctrl++")).clicked() {
-                            self.canvas_state.zoom_view_center(1.25);
+                        if ui.add(Button::new("Command Palette…").shortcut_text("Ctrl+Shift+P")).clicked() {
+                            self.run(Action::CommandPalette, &ctx);
                         }
-                        if ui.add(Button::new("Zoom Out").shortcut_text("Ctrl+-")).clicked() {
-                            self.canvas_state.zoom_view_center(1.0 / 1.25);
-                        }
-                        if ui.add(Button::new("Fit to Window").shortcut_text("Ctrl+0")).clicked() {
-                            self.canvas_state.request_fit();
-                        }
-                        if ui.add(Button::new("Actual Size").shortcut_text("Ctrl+1")).clicked() {
-                            self.canvas_state.actual_size();
-                        }
+                        ui.separator();
+                        if ui.add(Button::new("Zoom In").shortcut_text("Ctrl++")).clicked() { self.run(Action::ZoomIn, &ctx); }
+                        if ui.add(Button::new("Zoom Out").shortcut_text("Ctrl+-")).clicked() { self.run(Action::ZoomOut, &ctx); }
+                        if ui.add(Button::new("Fit to Window").shortcut_text("Ctrl+0")).clicked() { self.run(Action::Fit, &ctx); }
+                        if ui.add(Button::new("Actual Size").shortcut_text("Ctrl+1")).clicked() { self.run(Action::ActualSize, &ctx); }
                         ui.separator();
                         ui.checkbox(&mut self.canvas_state.show_grid, "Show Grid");
                     });
 
                     ui.menu_button("Help", |ui| {
-                        if ui.button("Keyboard Shortcuts").clicked() {
-                            self.about_tab = 0;
-                            self.show_about_dialog = true;
-                        }
-                        if ui.button("Author").clicked() {
-                            self.about_tab = 1;
-                            self.show_about_dialog = true;
-                        }
+                        if ui.button("Keyboard Shortcuts").clicked() { self.run(Action::Shortcuts, &ctx); }
+                        if ui.button("Author").clicked() { self.run(Action::Author, &ctx); }
                     });
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

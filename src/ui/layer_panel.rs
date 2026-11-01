@@ -4,7 +4,7 @@ use crate::theme;
 use crate::ui::widgets::icon_button;
 use crate::document::Document;
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum LayerAction {
     Select(usize),
     Add,

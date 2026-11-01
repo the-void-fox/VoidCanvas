@@ -18,6 +18,7 @@ use crate::tools::{
 };
 pub(crate) mod banner;
 mod chrome;
+pub(crate) mod commands;
 mod dialogs;
 pub(crate) mod file_dialog;
 mod file_io;
@@ -32,6 +33,8 @@ use crate::ui::{
     panels::{ColorPanel, ToolOptions},
 };
 pub(crate) use file_dialog::FileAction;
+use chrome::TRANSFORMS;
+use commands::Action;
 
 const APP_NAME: &str = "Void Canvas";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -119,6 +122,8 @@ pub struct AsciiArtEditor {
     pub(crate) banner: Option<banner::BannerDialog>,
     /// The built-in file chooser, while open.
     pub(crate) file_browser: Option<file_dialog::FileBrowser>,
+    /// The command palette, while open.
+    pub(crate) command_palette: Option<commands::CommandPalette>,
     /// Folder of the last file chosen; the built-in chooser starts there.
     pub(crate) last_dir: Option<std::path::PathBuf>,
     /// The system file dialog didn't open once, so the built-in one is used from then on.
@@ -168,6 +173,7 @@ impl Default for AsciiArtEditor {
             replace:        None,
             banner:         None,
             file_browser:   None,
+            command_palette: None,
             last_dir:       None,
             system_dialog_failed: cfg!(test),
             autosaved_version: 0,
@@ -458,6 +464,7 @@ impl AsciiArtEditor {
             || self.recovery.is_some()
             || self.image_import.is_some()
             || self.file_browser.is_some()
+            || self.command_palette.is_some()
         {
             return;
         }
@@ -487,15 +494,16 @@ impl AsciiArtEditor {
         let cmd = Modifiers::COMMAND;
         let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         // Most specific shortcuts first: consume_key ignores extra Shift.
-        let (select_all, deselect_all, replace) = ctx.input_mut(|i| {
-            (i.consume_key(cmd, Key::A), i.consume_key(cmd, Key::D), i.consume_key(cmd, Key::H))
-        });
-        if replace { self.open_replace(); }
-        if select_all && !self.drawing {
-            self.tools.selection.clear();
-            self.tools.selection.selection = Some((0, 0, self.doc.width - 1, self.doc.height - 1));
-        }
-        if deselect_all && !self.drawing { self.tools.selection.selection = None; }
+        let (palette, select_all, deselect_all, replace) = ctx.input_mut(|i| (
+            i.consume_key(cmd_shift, Key::P) || i.consume_key(Modifiers::NONE, Key::F1),
+            i.consume_key(cmd, Key::A),
+            i.consume_key(cmd, Key::D),
+            i.consume_key(cmd, Key::H),
+        ));
+        if palette { self.run(Action::CommandPalette, ctx); }
+        if replace { self.run(Action::Replace, ctx); }
+        if select_all { self.run(Action::SelectAll, ctx); }
+        if deselect_all { self.run(Action::Deselect, ctx); }
 
         let (save_as, save, open, new, redo, undo, zoom_in, zoom_out, fit, actual) = ctx.input_mut(|i| (
             i.consume_key(cmd_shift, Key::S),
@@ -510,10 +518,8 @@ impl AsciiArtEditor {
             i.consume_key(cmd, Key::Num1),
         ));
 
-        if !self.drawing {
-            if undo && self.history.undo(&mut self.doc) { self.show_status("Undo"); }
-            if redo && self.history.redo(&mut self.doc) { self.show_status("Redo"); }
-        }
+        if undo { self.run(Action::Undo, ctx); }
+        if redo { self.run(Action::Redo, ctx); }
         if new { self.request(PendingAction::New, ctx); }
         if open { self.request(PendingAction::Open, ctx); }
         if save_as { self.choose_file(FileAction::SaveAs { then: None }, ctx); } else if save { self.save(ctx); }
@@ -903,6 +909,7 @@ impl eframe::App for AsciiArtEditor {
         self.replace_dialog(&ctx);
         self.banner_dialog(&ctx);
         self.file_browser_dialog(&ctx);
+        self.command_palette_dialog(&ctx);
 
         if self.active_tool != ToolType::Text {
             self.tools.text.stop();

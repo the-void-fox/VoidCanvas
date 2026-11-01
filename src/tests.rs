@@ -383,6 +383,33 @@ mod ui {
     }
 
     #[test]
+    fn command_palette_runs_and_remembers_commands() {
+        let mut harness = harness();
+        harness.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, egui::Key::P);
+        harness.step();
+        assert!(harness.state().command_palette.is_some());
+        harness.state_mut().command_palette.as_mut().unwrap().query = "grad".into();
+        harness.step();
+        harness.key_press(egui::Key::Enter);
+        harness.step();
+
+        let app = harness.state();
+        assert!(app.command_palette.is_none());
+        assert_eq!(app.active_tool, ToolType::Gradient);
+        let entries = app.actions();
+        let first = &entries[app.palette_matches(&entries, "")[0]];
+        assert_eq!((first.group, first.name.as_str()), ("Tool", "Gradient"), "recently used commands come first");
+
+        // Esc closes it without running anything.
+        harness.key_press(egui::Key::F1);
+        harness.step();
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        assert!(harness.state().command_palette.is_none());
+        assert_eq!(harness.state().active_tool, ToolType::Gradient);
+    }
+
+    #[test]
     fn select_all_and_bracket_keys() {
         let mut harness = harness();
         harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
@@ -1087,6 +1114,37 @@ mod shade_brush {
             tool.on_release();
         }
         assert_eq!(doc.layers[0].get(0, 0).unwrap().ch, '@');
+    }
+}
+
+mod command_search {
+    use crate::app::commands::fuzzy_score;
+
+    #[test]
+    fn letters_must_appear_in_order() {
+        assert!(fuzzy_score("grd", "Tool: Gradient").is_some());
+        assert!(fuzzy_score("dg", "Tool: Gradient").is_none());
+        assert!(fuzzy_score("GRAD", "tool: gradient").is_some(), "case doesn't matter");
+    }
+
+    #[test]
+    fn word_starts_and_runs_rank_higher() {
+        let score = |q, t| fuzzy_score(q, t).unwrap();
+        assert!(score("md", "Layer: Merge Down") > score("md", "Edit: Command Palette"));
+        assert!(score("pal", "Palette: VGA") > score("pal", "Edit: Copy As Plain Text"));
+    }
+
+    #[test]
+    fn every_entry_is_unique() {
+        let app = crate::app::AsciiArtEditor::default();
+        let entries = app.actions();
+        let mut keys: Vec<String> = entries.iter().map(|e| format!("{}: {}", e.group, e.name)).collect();
+        let count = keys.len();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), count, "the palette remembers commands by their text");
+        let matches = app.palette_matches(&entries, "exp png");
+        assert_eq!(entries[matches[0]].name, "Export PNG…");
     }
 }
 

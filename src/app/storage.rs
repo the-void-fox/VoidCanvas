@@ -44,6 +44,9 @@ pub struct Settings {
     /// Most recent first.
     #[serde(default)]
     pub recent_files: Vec<String>,
+    /// Command palette entries, most recently run first.
+    #[serde(default)]
+    pub recent_commands: Vec<String>,
 }
 
 impl Settings {
@@ -73,6 +76,13 @@ impl Settings {
 
     pub fn forget_recent(&mut self, path: &str) {
         self.recent_files.retain(|p| p != path);
+        self.save();
+    }
+
+    pub fn add_recent_command(&mut self, key: String, max: usize) {
+        self.recent_commands.retain(|k| *k != key);
+        self.recent_commands.insert(0, key);
+        self.recent_commands.truncate(max);
         self.save();
     }
 
