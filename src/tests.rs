@@ -514,6 +514,19 @@ mod ui {
     }
 
     #[test]
+    fn replace_all_from_the_dialog() {
+        let mut harness = harness();
+        set_row(&mut harness, 0, 0, "..x.");
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::H);
+        harness.step();
+        harness.step();
+        harness.get_by_label("Replace All").click();
+        harness.step();
+        assert_eq!(row(&harness, 0, 0, 4), "##x#", "secondary '.' → primary '#' by default");
+        assert_eq!(harness.state().history.labels().0, vec!["Replace"]);
+    }
+
+    #[test]
     fn recent_files_are_unique_newest_first_and_capped() {
         let mut settings = crate::app::storage::Settings::default();
         for i in 0..12 {
@@ -699,6 +712,63 @@ mod glyph_sets {
         use crate::ui::panels::{PALETTES, palette};
         let sizes: Vec<usize> = (0..PALETTES.len()).map(|i| palette(i).len()).collect();
         assert_eq!(&sizes[..4], &[16, 256, 16, 4]);
+    }
+}
+
+#[test]
+fn neighbouring_cells_share_their_edges_at_any_zoom() {
+    use crate::ui::{canvas::CanvasState, glyph_render::snap_rect};
+    use eframe::egui::{pos2, vec2};
+    for step in 0..100 {
+        let mut state = CanvasState::default();
+        state.zoom = 0.2 + step as f32 * 0.0731;
+        state.offset = vec2(step as f32 * 3.7, step as f32 * 1.3);
+        let origin = pos2(20.0, 20.0);
+        for ppp in [1.0, 1.25, 2.0] {
+            for x in 0..200 {
+                let a = snap_rect(state.cell_rect(x, x, origin), ppp);
+                let b = snap_rect(state.cell_rect(x + 1, x + 1, origin), ppp);
+                assert_eq!((a.max.x, a.max.y), (b.min.x, b.min.y), "zoom {} cell {x}", state.zoom);
+            }
+        }
+    }
+}
+
+mod replacing {
+    use super::{NONE, blue, red};
+    use crate::app::replace::{CellPattern, replace_changes};
+    use crate::document::{Cell, Layer};
+
+    fn layer() -> Layer {
+        let mut layer = Layer::new(4, 1, "L");
+        layer.set(0, 0, Cell::new('#', red(), NONE));
+        layer.set(1, 0, Cell::new('#', blue(), NONE));
+        layer.set(2, 0, Cell::new('.', red(), NONE));
+        layer.set(3, 0, Cell::new(' ', red(), NONE));
+        layer
+    }
+
+    const ALL: (usize, usize, usize, usize) = (0, 0, 4, 1);
+
+    #[test]
+    fn finds_by_glyph_or_colour() {
+        let by_glyph = CellPattern { glyph: Some('#'), fg: None, bg: None };
+        let to_block = CellPattern { glyph: Some('█'), fg: None, bg: None };
+        assert_eq!(replace_changes(&layer(), ALL, &by_glyph, &to_block).len(), 2);
+
+        let by_red = CellPattern { glyph: None, fg: Some(red()), bg: None };
+        let blue_back = CellPattern { glyph: None, fg: None, bg: Some(blue()) };
+        let changes = replace_changes(&layer(), ALL, &by_red, &blue_back);
+        let mut cells: Vec<_> = changes.keys().copied().collect();
+        cells.sort();
+        assert_eq!(cells, [(0, 0), (2, 0)], "an empty cell's foreground doesn't count");
+    }
+
+    #[test]
+    fn stays_inside_the_region() {
+        let by_glyph = CellPattern { glyph: Some('#'), fg: None, bg: None };
+        let to_block = CellPattern { glyph: Some('█'), fg: None, bg: None };
+        assert_eq!(replace_changes(&layer(), (1, 0, 4, 1), &by_glyph, &to_block).len(), 1);
     }
 }
 

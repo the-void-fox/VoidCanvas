@@ -19,6 +19,7 @@ mod chrome;
 mod dialogs;
 mod file_io;
 mod import;
+pub(crate) mod replace;
 pub(crate) mod storage;
 
 use crate::ui::{
@@ -107,6 +108,8 @@ pub struct AsciiArtEditor {
     pub(crate) recovery: Option<storage::Autosave>,
     /// The Import Image dialog, while open.
     pub(crate) image_import: Option<import::ImageImport>,
+    /// The Replace window, while open.
+    replace: Option<replace::ReplaceDialog>,
     /// History version written by the last autosave.
     autosaved_version: u64,
     last_autosave: f64,
@@ -148,6 +151,7 @@ impl Default for AsciiArtEditor {
             settings:       storage::Settings::default(),
             recovery:       None,
             image_import:   None,
+            replace:        None,
             autosaved_version: 0,
             last_autosave:  0.0,
         }
@@ -449,7 +453,10 @@ impl AsciiArtEditor {
         let cmd = Modifiers::COMMAND;
         let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         // Most specific shortcuts first: consume_key ignores extra Shift.
-        let (select_all, deselect_all) = ctx.input_mut(|i| (i.consume_key(cmd, Key::A), i.consume_key(cmd, Key::D)));
+        let (select_all, deselect_all, replace) = ctx.input_mut(|i| {
+            (i.consume_key(cmd, Key::A), i.consume_key(cmd, Key::D), i.consume_key(cmd, Key::H))
+        });
+        if replace { self.open_replace(); }
         if select_all && !self.drawing {
             self.tools.selection.clear();
             self.tools.selection.selection = Some((0, 0, self.doc.width - 1, self.doc.height - 1));
@@ -859,6 +866,7 @@ impl eframe::App for AsciiArtEditor {
         self.unsaved_changes_modal(&ctx);
         self.recovery_modal(&ctx);
         self.image_import_dialog(&ctx);
+        self.replace_dialog(&ctx);
 
         if self.active_tool != ToolType::Text {
             self.tools.text.stop();

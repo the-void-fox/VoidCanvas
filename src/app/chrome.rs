@@ -109,6 +109,7 @@ impl AsciiArtEditor {
                             });
                         });
                         ui.separator();
+                        if ui.add(Button::new("Replace…").shortcut_text("Ctrl+H")).clicked() { self.open_replace(); }
                         if ui.button("Clear Layer").clicked() { self.clear_layer(); }
                     });
 
