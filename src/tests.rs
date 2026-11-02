@@ -861,6 +861,24 @@ mod ui {
         assert!(changed.is_empty(), "{changed:#?}");
     }
 
+    #[test]
+    fn adding_and_removing_layers_keeps_timeline_ids() {
+        use crate::app::commands::Action;
+        let warnings = capture_warnings();
+        let mut harness = harness();
+        let ctx = harness.ctx.clone();
+        harness.state_mut().run(Action::NewFrame, &ctx);
+        harness.step();
+        let add = || Action::Layer(crate::ui::layer_panel::LayerAction::Add);
+        for action in [add(), add(), Action::Undo, Action::Undo, Action::Redo] {
+            harness.state_mut().run(action, &ctx);
+            harness.step();
+            harness.step();
+        }
+        let changed: Vec<String> = warnings.lock().unwrap().iter().filter(|w| w.contains("changed id")).cloned().collect();
+        assert!(changed.is_empty(), "{changed:#?}");
+    }
+
     /// Going up folders in the built-in chooser: the lists change, their widgets keep their ids
     /// (a scroll area named after the folder used to get a new id, and a red outline, each time).
     #[test]

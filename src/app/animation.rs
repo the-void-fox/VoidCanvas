@@ -251,13 +251,16 @@ impl AsciiArtEditor {
     /// One row per layer, the top layer first: visibility, lock and name.
     fn timeline_layers(&mut self, ui: &mut Ui) {
         let mut action = None;
-        for i in (0..self.doc.layers.len()).rev() {
+        let count = self.doc.layers.len();
+        for i in (0..count).rev() {
             let layer = &self.doc.layers[i];
             let active = i == self.doc.active_layer;
             let row = Rect::from_min_size(ui.cursor().min, vec2(LAYER_COLUMN, CEL.y));
             ui.painter().rect_filled(row, 0.0, if active { theme::SURFACE_ACTIVE } else { theme::BG_DEEP });
             ui.painter().hline(row.x_range(), row.max.y - 0.5, Stroke::new(1.0, theme::PANEL));
-            let builder = UiBuilder::new().id(Id::new(("timeline_layer", i))).max_rect(row).sense(Sense::click()).layout(Layout::left_to_right(Align::Center));
+            // Ids follow rows, not layers: when a layer comes or goes, the rows below keep
+            // their place and their ids (a widget changing id in place is flagged by egui).
+            let builder = UiBuilder::new().id(Id::new(("timeline_layer", count - 1 - i))).max_rect(row).sense(Sense::click()).layout(Layout::left_to_right(Align::Center));
             let resp = ui.scope_builder(builder, |ui| {
                 ui.set_min_size(row.size());
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -383,7 +386,7 @@ impl AsciiArtEditor {
                 let r = cel(row, f);
                 let filled = doc.layers[layer].cells_in(f).iter().any(|c| !c.is_empty());
                 let active = layer == doc.active_layer && current;
-                let resp = ui.interact(r, ui.id().with(("cel", layer, f)), Sense::click());
+                let resp = ui.interact(r, ui.id().with(("cel", row, f)), Sense::click());
                 if active {
                     painter.rect_stroke(r.shrink(1.0), 2.0, Stroke::new(1.5, theme::ACCENT), StrokeKind::Inside);
                 } else if resp.hovered() {
