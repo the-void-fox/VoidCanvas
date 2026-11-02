@@ -32,6 +32,26 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 
 ---
 
+## Gallery
+
+<p align="center">
+  <img src="assets/cow.webp" width="640" alt="A cow model turning around on a 3D layer, drawn in colour half blocks">
+</p>
+<p align="center"><i>An OBJ model on a 3D layer, in colour half blocks, turning a step per frame — exported as a GIF from Void Canvas.</i></p>
+
+<p align="center">
+  <img src="assets/3d-layers.png" width="49%" alt="The 3D window editing a cow model, with its turntable frames in the timeline">
+  <img src="assets/gif-import.png" width="49%" alt="Importing an animated GIF: preview, frame slider and conversion settings">
+</p>
+<p align="center"><i>Left: the 3D window — object, look, turn, light and spin, re-editable at any time. Right: an animated GIF coming in as half blocks, ASCII, shades or braille.</i></p>
+
+<p align="center">
+  <img src="assets/library.png" width="49%" alt="The Library window showing the xterm 256 palette">
+</p>
+<p align="center"><i>The Library: glyph sets, shade ramps, brushes and palettes in one place, shareable as text.</i></p>
+
+---
+
 ## Installation
 
 ### Pre-built binaries
