@@ -28,6 +28,8 @@ fn main() -> eframe::Result<()> {
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Void Canvas")
+        // Wayland ignores window icons; desktops find void-canvas.desktop and its icon by this id.
+        .with_app_id("void-canvas")
         .with_min_inner_size([1000.0, 640.0])
         .with_inner_size([1400.0, 900.0]);
 

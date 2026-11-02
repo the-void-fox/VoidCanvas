@@ -4,3 +4,7 @@ target/
 /dist/
 /tools/
 /AppDir/
+
+# nix build
+/result
+/result-*

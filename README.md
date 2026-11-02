@@ -70,6 +70,15 @@ cargo build --release
 ./target/release/void_canvas.exe      # Windows
 ```
 
+### Nix
+
+```bash
+nix run github:the-void-fox/VoidCanvas
+```
+
+The flake also exports `overlays.default` (adds `void-canvas` to nixpkgs) for NixOS and home-manager configs,
+and `nix develop` opens the same build shell as `nix-shell`.
+
 ---
 
 ## Keyboard Shortcuts
@@ -268,4 +277,6 @@ for the glyphs both lack (braille, sextants, many symbols) — all under the SIL
 
 ## License
 
-Modified MIT — see [LICENSE](LICENSE).
+Void Canvas is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation, either version 3 of the License,
+or (at your option) any later version (GPL-3.0-or-later) — see [LICENSE](LICENSE).
