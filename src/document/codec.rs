@@ -21,6 +21,7 @@
 //! encoder tries both and keeps the smaller file.
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 
 use super::{Blend, Cell, Color, Document, Layer, Scene3D};
 
@@ -430,35 +431,91 @@ fn part_candidates<T: PartialEq>(cands: &[(usize, &Cell)], part: impl Fn(&Cell) 
     out
 }
 
+/// A quick hash for the tables' small keys. (The standard one resists crafted keys, which a
+/// document's own glyphs and colours never are, and costs more on millions of cells.)
+#[derive(Default)]
+struct QuickHasher(u64);
+
+impl Hasher for QuickHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(b as u64);
+        }
+    }
+
+    fn write_u8(&mut self, n: u8) {
+        self.write_u64(n as u64);
+    }
+
+    fn write_u32(&mut self, n: u32) {
+        self.write_u64(n as u64);
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+type QuickMap<K, V> = HashMap<K, V, BuildHasherDefault<QuickHasher>>;
+
+/// The glyphs a document uses, by code point, and its colours, the most used first.
+struct Tables {
+    glyphs: Vec<char>,
+    colors: Vec<Rgba>,
+    glyph_index: QuickMap<char, u32>,
+    color_index: QuickMap<Rgba, u32>,
+}
+
+impl Tables {
+    fn of(doc: &Document) -> Self {
+        let mut glyph_index: QuickMap<char, u32> = QuickMap::default();
+        let mut uses: QuickMap<Rgba, usize> = QuickMap::default();
+        for layer in &doc.layers {
+            for f in 0..doc.frame_count() {
+                for cell in layer.cells_in(f) {
+                    glyph_index.insert(cell.ch, 0);
+                    *uses.entry(rgba(&cell.fg)).or_default() += 1;
+                    *uses.entry(rgba(&cell.bg)).or_default() += 1;
+                }
+            }
+        }
+        let mut glyphs: Vec<char> = glyph_index.keys().copied().collect();
+        glyphs.sort_unstable();
+        let mut by_use: Vec<(usize, Rgba)> = uses.into_iter().map(|(color, n)| (n, color)).collect();
+        by_use.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        let colors: Vec<Rgba> = by_use.into_iter().map(|(_, color)| color).collect();
+        for (i, g) in glyphs.iter().enumerate() {
+            glyph_index.insert(*g, i as u32);
+        }
+        let color_index = colors.iter().enumerate().map(|(i, &c)| (c, i as u32)).collect();
+        Self { glyphs, colors, glyph_index, color_index }
+    }
+}
+
+/// Both ways of writing colours are tried, side by side, and the smaller file is kept.
 pub fn encode(doc: &Document) -> Vec<u8> {
-    let indexed = encode_with(doc, false);
-    let predicted = encode_with(doc, true);
+    let tables = Tables::of(doc);
+    let (indexed, predicted) = std::thread::scope(|scope| {
+        let indexed = scope.spawn(|| encode_tables(doc, false, &tables));
+        (indexed.join().expect("the encoder failed"), encode_tables(doc, true, &tables))
+    });
     if predicted.len() < indexed.len() { predicted } else { indexed }
 }
 
 /// With `predicted` colours spelled out as differences from a prediction instead of table indices.
+#[cfg(test)]
 pub(crate) fn encode_with(doc: &Document, predicted: bool) -> Vec<u8> {
+    encode_tables(doc, predicted, &Tables::of(doc))
+}
+
+fn encode_tables(doc: &Document, predicted: bool, tables: &Tables) -> Vec<u8> {
     let (w, h) = (doc.width, doc.height);
     let frames = doc.frame_count();
-
-    // Tables: glyphs by code point, colours by how often they're used.
-    let mut glyphs: Vec<char> = Vec::new();
-    let mut uses: HashMap<Rgba, usize> = HashMap::new();
-    for layer in &doc.layers {
-        for f in 0..frames {
-            for cell in layer.cells_in(f) {
-                glyphs.push(cell.ch);
-                *uses.entry(rgba(&cell.fg)).or_default() += 1;
-                *uses.entry(rgba(&cell.bg)).or_default() += 1;
-            }
-        }
-    }
-    glyphs.sort_unstable();
-    glyphs.dedup();
-    let mut colors: Vec<Rgba> = uses.keys().copied().collect();
-    colors.sort_by(|a, b| uses[b].cmp(&uses[a]).then(a.cmp(b)));
-    let glyph_index: HashMap<char, u32> = glyphs.iter().enumerate().map(|(i, &c)| (c, i as u32)).collect();
-    let color_index: HashMap<Rgba, u32> = colors.iter().enumerate().map(|(i, &c)| (c, i as u32)).collect();
+    let Tables { glyphs, colors, glyph_index, color_index } = tables;
 
     let mut e = Encoder::new();
     let mut m = Models::new(glyphs.len(), colors.len());
@@ -498,14 +555,14 @@ pub(crate) fn encode_with(doc: &Document, predicted: bool) -> Vec<u8> {
     }
     m.number.encode(&mut e, glyphs.len() as u32);
     let mut previous = 0;
-    for &g in &glyphs {
+    for &g in glyphs {
         m.number.encode(&mut e, g as u32 - previous);
         previous = g as u32;
     }
     e.bit(&mut m.flag, predicted);
     if !predicted {
         m.number.encode(&mut e, colors.len() as u32);
-        for &(r, g, b, a) in &colors {
+        for &(r, g, b, a) in colors {
             for (channel, value) in m.channel.iter_mut().zip([r, g, b, a]) {
                 channel.encode(&mut e, value as u32);
             }
