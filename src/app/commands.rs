@@ -221,10 +221,10 @@ impl AsciiArtEditor {
                 self.new_height = self.doc.height;
                 self.show_new_dialog = true;
             }
-            Action::Open => self.choose_file(FileAction::Open, ctx),
+            Action::Open => self.choose_file(FileAction::Open),
             Action::OpenRecent(path) => self.open_path(std::path::Path::new(&path)),
-            Action::Save => self.save(ctx),
-            Action::ChooseFile(file) => self.choose_file(file, ctx),
+            Action::Save => self.save(),
+            Action::ChooseFile(file) => self.choose_file(file),
             Action::Quit => self.request(PendingAction::Quit, ctx),
             Action::CloseTab => self.request(PendingAction::CloseTab, ctx),
             Action::NextTab => self.cycle_tab(1),
@@ -275,7 +275,7 @@ impl AsciiArtEditor {
             Action::Edit3D => self.edit_3d(self.doc.active_layer),
             Action::New3DFromModel => {
                 self.close_3d();
-                self.choose_file(FileAction::LoadModel, ctx);
+                self.choose_file(FileAction::LoadModel);
             }
             Action::Rasterize3D => self.rasterize_3d(),
             Action::UseBrush(preset) => {

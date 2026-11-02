@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, *};
 use image::RgbaImage;
 
-use super::AsciiArtEditor;
+use super::{AsciiArtEditor, PendingAction};
 use super::file_dialog::FileAction;
 use crate::document::{Cell, Document};
 use crate::{export, theme};
@@ -51,28 +51,45 @@ pub struct LoadingPicture {
     image: Receiver<Result<RgbaImage, String>>,
 }
 
-/// A PNG or GIF being written from a copy of the document.
-pub struct ExportJob {
-    kind: &'static str,
+/// What a file job writes.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Writing {
+    Png { transparent: bool },
+    Gif,
+    /// The document itself, as a `.vc` file.
+    Document,
+}
+
+/// A file being written from a copy of the document: a PNG, a GIF, or the document itself.
+pub struct FileJob {
+    writing: Writing,
     path: PathBuf,
+    /// Runs once the document has been saved.
+    then: Option<PendingAction>,
     /// The document's render generation it started from: 3D frames it renders are kept if it still matches.
     generation: u64,
-    progress: Receiver<ExportProgress>,
-    /// Set by Cancel; the export stops after the frame in hand.
+    progress: Receiver<FileProgress>,
+    /// Set by Cancel; an export stops after the frame in hand.
     stop: Arc<AtomicBool>,
     /// 3D frames to render first, and how many are done.
     renders: (usize, usize),
     /// Frames to write, and how many are in the file.
     frames: (usize, usize),
+    started: Instant,
 }
 
-enum ExportProgress {
+enum FileProgress {
     /// A 3D frame that was out of date (the editor takes it too).
     Rendered(usize, usize, Vec<Cell>),
     /// Frames in the file so far.
     Written(usize),
-    Finished(Result<(), String>),
+    /// Done; for a document, whether it was written compressed.
+    Finished(Result<bool, String>),
 }
+
+/// The waiting window shows up only for work that takes longer than this, so a quick save
+/// doesn't flash a window.
+const SHOW_WAITING_AFTER: Duration = Duration::from_millis(250);
 
 /// A system dialog that returns faster than this was never shown (nobody cancels that quickly).
 const FAILED_DIALOG: Duration = Duration::from_millis(300);
@@ -104,8 +121,8 @@ impl AsciiArtEditor {
                 self.render_job = None;
             }
         }
-        // An export renders the 3D frames it needs itself.
-        if self.render_job.is_none() && self.export_job.is_none() {
+        // A file job renders the 3D frames it needs itself.
+        if self.render_job.is_none() && self.file_job.is_none() {
             let work = self.doc.stale_3d();
             if !work.is_empty() {
                 let (w, h) = (self.doc.width, self.doc.height);
@@ -128,24 +145,30 @@ impl AsciiArtEditor {
         }
     }
 
-    /// Writes a PNG or GIF on another thread, from a copy of the document; 3D frames still out of
-    /// date are rendered there first. The waiting window shows how far it is.
-    pub(super) fn start_image_export(&mut self, gif: bool, transparent: bool, path: PathBuf) {
-        // The export renders what it needs; the editor's own 3D work waits until it is done.
+    /// Writes a PNG, a GIF or the document on another thread, from a copy of the document; 3D
+    /// frames still out of date are rendered there first. Input waits meanwhile; the waiting
+    /// window shows how far it is. `then` runs once a document has been saved.
+    pub(super) fn start_writing(&mut self, writing: Writing, path: PathBuf, then: Option<PendingAction>) {
+        // The job renders what it needs; the editor's own 3D work waits until it is done.
         self.render_job = None;
         let mut doc = self.doc.clone();
-        let frames: Vec<usize> = if gif { (0..doc.frame_count()).collect() } else { vec![doc.frame] };
+        let frames: Vec<usize> = match writing {
+            Writing::Png { .. } => vec![doc.frame],
+            Writing::Gif | Writing::Document => (0..doc.frame_count()).collect(),
+        };
         let stale: Vec<(usize, usize)> = doc.stale_3d().into_iter().filter(|(_, frame)| frames.contains(frame)).collect();
         let stop = Arc::new(AtomicBool::new(false));
         let (send, progress) = channel();
-        self.export_job = Some(ExportJob {
-            kind: if gif { "GIF" } else { "PNG" },
+        self.file_job = Some(FileJob {
+            writing,
             path: path.clone(),
+            then,
             generation: doc.render_gen,
             progress,
             stop: stop.clone(),
             renders: (stale.len(), 0),
             frames: (frames.len(), 0),
+            started: Instant::now(),
         });
         std::thread::spawn(move || {
             let (w, h) = (doc.width, doc.height);
@@ -154,48 +177,69 @@ impl AsciiArtEditor {
                 let Some(scene) = doc.layers[layer].scene.clone() else { continue };
                 let cells = scene.render(w, h, frame);
                 doc.finish_3d(layer, frame, cells.clone());
-                if send.send(ExportProgress::Rendered(layer, frame, cells)).is_err() { return; }
+                if send.send(FileProgress::Rendered(layer, frame, cells)).is_err() { return; }
             }
-            let result = if stop.load(Ordering::Relaxed) {
+            let stopped = || stop.load(Ordering::Relaxed);
+            let result = if stopped() {
                 Err("stopped".into())
-            } else if gif {
-                export::write_gif(&doc, &path, |written| !stop.load(Ordering::Relaxed) && send.send(ExportProgress::Written(written)).is_ok())
             } else {
-                export::render_png(&doc, transparent).and_then(|image| {
-                    if stop.load(Ordering::Relaxed) { return Err("stopped".into()); }
-                    image.save(&path).map_err(|e| e.to_string())
-                })
+                match writing {
+                    Writing::Gif => export::write_gif(&doc, &path, |written| !stopped() && send.send(FileProgress::Written(written)).is_ok()).map(|()| true),
+                    Writing::Png { transparent } => export::render_png(&doc, transparent).and_then(|image| {
+                        if stopped() { return Err("stopped".into()); }
+                        image.save(&path).map(|()| true).map_err(|e| e.to_string())
+                    }),
+                    Writing::Document => super::file_io::document_bytes(&doc).and_then(|(bytes, compressed)| {
+                        super::storage::write_atomically(&path, bytes).map(|()| compressed).map_err(|e| e.to_string())
+                    }),
+                }
             };
-            let _ = send.send(ExportProgress::Finished(result));
+            let _ = send.send(FileProgress::Finished(result));
         });
     }
 
-    pub(super) fn poll_export(&mut self, ctx: &egui::Context) {
-        let Some(job) = &mut self.export_job else { return };
+    pub(super) fn poll_file_job(&mut self, ctx: &egui::Context) {
+        let Some(job) = &mut self.file_job else { return };
         let finished = loop {
             match job.progress.try_recv() {
-                Ok(ExportProgress::Rendered(layer, frame, cells)) => {
+                Ok(FileProgress::Rendered(layer, frame, cells)) => {
                     job.renders.1 += 1;
                     if job.generation == self.doc.render_gen {
                         self.doc.finish_3d(layer, frame, cells);
                     }
                 }
-                Ok(ExportProgress::Written(written)) => job.frames.1 = written,
-                Ok(ExportProgress::Finished(result)) => break Some(result),
+                Ok(FileProgress::Written(written)) => job.frames.1 = written,
+                Ok(FileProgress::Finished(result)) => break Some(result),
                 Err(TryRecvError::Empty) => break None,
-                Err(TryRecvError::Disconnected) => break Some(Err("the export stopped unexpectedly".into())),
+                Err(TryRecvError::Disconnected) => break Some(Err("the writer stopped unexpectedly".into())),
             }
         };
         let Some(result) = finished else {
             ctx.request_repaint_after(Duration::from_millis(50));
             return;
         };
-        let job = self.export_job.take().unwrap();
+        let job = self.file_job.take().unwrap();
+        let kind = match job.writing {
+            Writing::Png { .. } => "PNG",
+            Writing::Gif => "GIF",
+            Writing::Document => {
+                return match result {
+                    Ok(compressed) => self.saved(job.path.to_string_lossy().to_string(), compressed, job.then, ctx),
+                    Err(e) => self.show_status(format!("Save failed: {e}")),
+                };
+            }
+        };
         match result {
-            Ok(()) => self.show_status(format!("Exported {}: {}", job.kind, job.path.display())),
-            Err(_) if job.stop.load(Ordering::Relaxed) => self.show_status(format!("{} export cancelled", job.kind)),
-            Err(e) => self.show_status(format!("{} export failed: {e}", job.kind)),
+            Ok(_) => self.show_status(format!("Exported {kind}: {}", job.path.display())),
+            Err(_) if job.stop.load(Ordering::Relaxed) => self.show_status(format!("{kind} export cancelled")),
+            Err(e) => self.show_status(format!("{kind} export failed: {e}")),
         }
+    }
+
+    /// Is a file being written?
+    #[cfg(test)]
+    pub(crate) fn writing_file(&self) -> bool {
+        self.file_job.is_some()
     }
 
     /// Renders whatever 3D work is left before something reads the cells (save, export, merge…).
@@ -230,7 +274,7 @@ impl AsciiArtEditor {
         };
         let pending = self.pending_dialog.take().unwrap();
         match answer {
-            Some(path) => self.finish_file_action(pending.action, path, ctx),
+            Some(path) => self.finish_file_action(pending.action, path),
             None if pending.started.elapsed() >= FAILED_DIALOG => {} // cancelled
             None => {
                 self.system_dialog_failed = true;
@@ -258,9 +302,11 @@ impl AsciiArtEditor {
 
     pub(super) fn poll_opening(&mut self, ctx: &egui::Context) {
         // In the order they were asked for, so the tabs line up that way; not in the middle of a
-        // stroke, which a new tab in front would cut off.
+        // stroke, which a new tab in front would cut off, nor while the document in front is
+        // being saved.
         while let Some(first) = self.opening.first()
             && !self.drawing
+            && self.file_job.is_none()
         {
             let read = match first.document.try_recv() {
                 Ok(read) => read,
@@ -333,18 +379,26 @@ impl AsciiArtEditor {
 
     /// Something the user waits for: a small window in front, so nothing else starts meanwhile.
     pub(super) fn waiting_window(&mut self, ctx: &egui::Context) {
-        if let Some(job) = &self.export_job {
+        if let Some(job) = &self.file_job {
+            if job.started.elapsed() < SHOW_WAITING_AFTER {
+                ctx.request_repaint_after(SHOW_WAITING_AFTER);
+                return;
+            }
             let stopping = job.stop.load(Ordering::Relaxed);
             let ((renders, rendered), (frames, written)) = (job.renders, job.frames);
+            let name = job.path.file_name().unwrap_or_default().to_string_lossy();
             let (text, done, total) = if stopping {
                 ("Stopping…".to_owned(), rendered + written, renders + frames)
             } else if rendered < renders {
                 (format!("Rendering 3D frames  {rendered} / {renders}"), rendered, renders + frames)
-            } else if frames > 1 {
-                (format!("Writing {}  frame {} / {frames}", job.kind, (written + 1).min(frames)), renders + written, renders + frames)
             } else {
-                (format!("Writing {}…", job.kind), renders, renders + frames)
+                match job.writing {
+                    Writing::Document => (format!("Saving {name}…"), renders, renders),
+                    Writing::Gif if frames > 1 => (format!("Writing GIF  frame {} / {frames}", (written + 1).min(frames)), renders + written, renders + frames),
+                    _ => (format!("Writing {name}…"), renders, renders + frames),
+                }
             };
+            let can_cancel = job.writing != Writing::Document;
             let mut cancel = false;
             Modal::new(Id::new("waiting")).show(ctx, |ui| {
                 ui.set_width(320.0);
@@ -352,10 +406,14 @@ impl AsciiArtEditor {
                     ui.add(Spinner::new().size(18.0).color(theme::ACCENT));
                     ui.label(text);
                 });
-                ui.add_space(6.0);
-                ui.add(ProgressBar::new(done as f32 / total.max(1) as f32).desired_height(10.0).fill(theme::ACCENT_STRONG));
-                ui.add_space(6.0);
-                cancel = ui.add_enabled(!stopping, Button::new("Cancel")).clicked();
+                if total > 0 {
+                    ui.add_space(6.0);
+                    ui.add(ProgressBar::new(done as f32 / total as f32).desired_height(10.0).fill(theme::ACCENT_STRONG));
+                }
+                if can_cancel {
+                    ui.add_space(6.0);
+                    cancel = ui.add_enabled(!stopping, Button::new("Cancel")).clicked();
+                }
             });
             if cancel {
                 job.stop.store(true, Ordering::Relaxed);
@@ -390,6 +448,6 @@ impl AsciiArtEditor {
 
     /// Is something running that the user waits for (the waiting window is up)?
     pub(super) fn waiting(&self) -> bool {
-        self.loading_picture.is_some() || self.pending_dialog.is_some() || self.export_job.is_some()
+        self.loading_picture.is_some() || self.pending_dialog.is_some() || self.file_job.is_some()
     }
 }

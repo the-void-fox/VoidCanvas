@@ -252,6 +252,17 @@ mod ui {
         harness.step();
     }
 
+    /// Steps until the file being written (saved or exported on another thread) is done.
+    fn wait_for_writing(harness: &mut Harness<AsciiArtEditor>) {
+        for _ in 0..1000 {
+            if !harness.state().writing_file() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            harness.step();
+        }
+        assert!(!harness.state().writing_file(), "the file wasn't written");
+        harness.step();
+    }
+
     fn cell_pos(harness: &Harness<AsciiArtEditor>, x: usize, y: usize) -> Pos2 {
         harness.state().canvas_state.screen_cell_rect(x, y).center()
     }
@@ -992,6 +1003,7 @@ mod ui {
         browser.name = "art".into(); // the extension gets added
         harness.get_by_label("Save").click();
         harness.step();
+        wait_for_writing(&mut harness);
 
         let path = dir.join("art.vc");
         let app = harness.state();
@@ -1006,6 +1018,7 @@ mod ui {
         set_row(&mut harness, 0, 0, "yo");
         harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::S);
         harness.step();
+        wait_for_writing(&mut harness);
         assert!(harness.state().file_browser.is_none());
         let saved = crate::app::file_io::parse_document(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved.layers[0].get(0, 0).unwrap().ch, 'y');
@@ -1060,6 +1073,7 @@ mod ui {
         harness.step();
         harness.get_by_label("Save").click(); // in the chooser
         harness.step();
+        wait_for_writing(&mut harness);
 
         assert!(dir.join("Untitled.vc").is_file());
         let app = harness.state();
@@ -1072,6 +1086,33 @@ mod ui {
         let mut doc = crate::document::Document::new(6, 2);
         doc.layers[0].set(0, 0, crate::document::Cell::new(ch, crate::document::Color::WHITE, crate::document::Color::TRANSPARENT));
         std::fs::write(path, serde_json::to_string(&doc).unwrap()).unwrap();
+    }
+
+    /// Saving writes a copy on another thread; 3D frames still out of date are rendered for the
+    /// file, and the editor keeps them.
+    #[test]
+    fn saving_renders_3d_frames_on_the_way() {
+        use crate::document::scene::{Object3D, Scene3D};
+        let dir = temp_folder("save3d");
+        let path = dir.join("cube.vc");
+        let mut harness = harness();
+        let doc = &mut harness.state_mut().doc;
+        *doc = crate::document::Document::new(24, 12);
+        let mut layer = crate::document::Layer::new(24, 12, "3D");
+        layer.scene = Some(Box::new(Scene3D { object: Object3D::Cube, ..Scene3D::default() }));
+        doc.insert_layer(1, layer);
+        doc.file_path = Some(path.to_string_lossy().to_string());
+        assert!(!doc.stale_3d().is_empty());
+        let ctx = harness.ctx.clone();
+        harness.state_mut().run(crate::app::commands::Action::Save, &ctx);
+        wait_for_writing(&mut harness);
+
+        let app = harness.state();
+        assert!(!app.doc.modified);
+        assert!(app.doc.stale_3d().is_empty(), "the frames rendered for the file are kept");
+        let saved = crate::app::file_io::parse_document(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.layers[1].cells_in(0), app.doc.layers[1].scene.as_ref().unwrap().render(24, 12, 0));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// A document is read on another thread, and doesn't jump in front in the middle of a stroke.

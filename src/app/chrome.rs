@@ -52,19 +52,19 @@ impl AsciiArtEditor {
                                 }
                             }
                         });
-                        if ui.add(Button::new("Save").shortcut_text("Ctrl+S")).clicked() { self.save(&ctx); }
-                        if ui.add(Button::new("Save As…").shortcut_text("Ctrl+Shift+S")).clicked() { self.choose_file(FileAction::SaveAs { then: None }, &ctx); }
+                        if ui.add(Button::new("Save").shortcut_text("Ctrl+S")).clicked() { self.save(); }
+                        if ui.add(Button::new("Save As…").shortcut_text("Ctrl+Shift+S")).clicked() { self.choose_file(FileAction::SaveAs { then: None }); }
                         ui.separator();
-                        if ui.button("Import Image…").clicked() { self.choose_file(FileAction::ImportImage, &ctx); }
+                        if ui.button("Import Image…").clicked() { self.choose_file(FileAction::ImportImage); }
                         ui.separator();
-                        if ui.button("Export Text…").clicked() { self.choose_file(FileAction::ExportText, &ctx); }
-                        if ui.button("Export ANSI…").clicked() { self.choose_file(FileAction::ExportAnsi, &ctx); }
-                        if ui.button("Export HTML…").clicked() { self.choose_file(FileAction::ExportHtml, &ctx); }
-                        if ui.button("Export PNG…").clicked() { self.choose_file(FileAction::ExportPng { transparent: false }, &ctx); }
-                        if ui.button("Export PNG (Transparent)…").clicked() { self.choose_file(FileAction::ExportPng { transparent: true }, &ctx); }
+                        if ui.button("Export Text…").clicked() { self.choose_file(FileAction::ExportText); }
+                        if ui.button("Export ANSI…").clicked() { self.choose_file(FileAction::ExportAnsi); }
+                        if ui.button("Export HTML…").clicked() { self.choose_file(FileAction::ExportHtml); }
+                        if ui.button("Export PNG…").clicked() { self.choose_file(FileAction::ExportPng { transparent: false }); }
+                        if ui.button("Export PNG (Transparent)…").clicked() { self.choose_file(FileAction::ExportPng { transparent: true }); }
                         let gif = Button::new("Export GIF…");
                         if ui.add_enabled(self.doc.frame_count() > 1, gif).on_disabled_hover_text("Needs more than one frame").clicked() {
-                            self.choose_file(FileAction::ExportGif, &ctx);
+                            self.choose_file(FileAction::ExportGif);
                         }
                         ui.separator();
                         if ui.add(Button::new("Close Tab").shortcut_text("Ctrl+W")).clicked() { self.run(Action::CloseTab, &ctx); }

@@ -348,7 +348,7 @@ impl AsciiArtEditor {
             self.three_d = None;
         }
         if load_model {
-            self.choose_file(super::file_dialog::FileAction::LoadModel, ctx);
+            self.choose_file(super::file_dialog::FileAction::LoadModel);
         }
         if manage_ramps {
             self.open_library(super::library::LibraryTab::Ramps);

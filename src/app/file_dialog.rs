@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, *};
 
-use super::{AsciiArtEditor, PendingAction, import::IMAGE_EXTENSIONS};
+use super::{AsciiArtEditor, PendingAction, background::Writing, import::IMAGE_EXTENSIONS};
 use crate::{export, icons, theme};
 
 /// What a chosen file is for.
@@ -70,7 +70,7 @@ const FAILED_DIALOG: Duration = Duration::from_millis(300);
 impl AsciiArtEditor {
     /// Asks for a file for `action`, then carries it out. The system dialog runs on its own
     /// thread (the window keeps answering); when it can't open, the built-in chooser does.
-    pub(super) fn choose_file(&mut self, action: FileAction, ctx: &egui::Context) {
+    pub(super) fn choose_file(&mut self, action: FileAction) {
         if self.pending_dialog.is_some() { return; }
         let suggested = self.suggested_file_name(&action);
         if !self.system_dialog_failed && !cfg!(target_os = "macos") {
@@ -84,7 +84,7 @@ impl AsciiArtEditor {
             let dialog = rfd::FileDialog::new().add_filter(kind, extensions);
             let picked = if action.saves() { dialog.set_file_name(&suggested).save_file() } else { dialog.pick_file() };
             match picked {
-                Some(path) => return self.finish_file_action(action, path, ctx),
+                Some(path) => return self.finish_file_action(action, path),
                 None if started.elapsed() >= FAILED_DIALOG => return, // cancelled
                 None => {
                     self.system_dialog_failed = true;
@@ -111,7 +111,7 @@ impl AsciiArtEditor {
         format!("{stem}.{}", action.filter().1[0])
     }
 
-    pub(super) fn finish_file_action(&mut self, action: FileAction, mut path: PathBuf, ctx: &egui::Context) {
+    pub(super) fn finish_file_action(&mut self, action: FileAction, mut path: PathBuf) {
         if let Some(dir) = path.parent() {
             self.last_dir = Some(dir.to_path_buf());
         }
@@ -121,10 +121,11 @@ impl AsciiArtEditor {
                 path.set_extension(ext);
             }
         }
-        // Images take a while: they are written in the background.
+        // Images and documents take a while: they are written in the background.
         match action {
-            FileAction::ExportPng { transparent } => return self.start_image_export(false, transparent, path),
-            FileAction::ExportGif => return self.start_image_export(true, false, path),
+            FileAction::ExportPng { transparent } => return self.start_writing(Writing::Png { transparent }, path, None),
+            FileAction::ExportGif => return self.start_writing(Writing::Gif, path, None),
+            FileAction::SaveAs { then } => return self.start_writing(Writing::Document, path, then),
             _ => {}
         }
         // Text exports read the cells: 3D layers catch up first.
@@ -148,13 +149,6 @@ impl AsciiArtEditor {
         match action {
             FileAction::Open => self.open_path(&path),
             FileAction::ImportImage => self.start_image_import(&path),
-            FileAction::SaveAs { then } => {
-                if self.write_file(path.to_string_lossy().to_string())
-                    && let Some(then) = then
-                {
-                    self.perform(then, ctx);
-                }
-            }
             FileAction::LoadModel => self.load_model(&path),
             _ => {}
         }
@@ -166,7 +160,7 @@ impl AsciiArtEditor {
         match modal.inner {
             Some(Outcome::Chosen(path)) => {
                 let browser = self.file_browser.take().unwrap();
-                self.finish_file_action(browser.action, path, ctx);
+                self.finish_file_action(browser.action, path);
             }
             Some(Outcome::Cancelled) => self.file_browser = None,
             None if modal.should_close() => self.file_browser = None,

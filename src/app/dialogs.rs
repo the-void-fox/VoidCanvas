@@ -277,7 +277,7 @@ impl AsciiArtEditor {
         match choice {
             Some(Choice::Save) => {
                 self.pending_action = None;
-                self.save_then(Some(action), ctx);
+                self.save_then(Some(action));
             }
             Some(Choice::Discard) => {
                 self.pending_action = None;

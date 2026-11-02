@@ -152,8 +152,8 @@ pub struct AsciiArtEditor {
     loading_picture: Option<background::LoadingPicture>,
     /// Documents being read, in the order they were opened.
     opening: Vec<background::OpeningFile>,
-    /// A PNG or GIF being written.
-    export_job: Option<background::ExportJob>,
+    /// A PNG, GIF or the document being written.
+    file_job: Option<background::FileJob>,
     /// The Library window, while open.
     pub(crate) library: Option<library::LibraryWindow>,
     /// The 3D window, while open.
@@ -221,7 +221,7 @@ impl Default for AsciiArtEditor {
             render_job:     None,
             pending_dialog: None,
             loading_picture: None,
-            export_job: None,
+            file_job: None,
             opening: Vec::new(),
             style_before:   None,
             brush_save_name: String::new(),
@@ -599,7 +599,7 @@ impl AsciiArtEditor {
         if open { self.run(Action::Open, ctx); }
         if close_tab { self.run(Action::CloseTab, ctx); }
         if prev_tab { self.run(Action::PrevTab, ctx); } else if next_tab { self.run(Action::NextTab, ctx); }
-        if save_as { self.choose_file(FileAction::SaveAs { then: None }, ctx); } else if save { self.save(ctx); }
+        if save_as { self.choose_file(FileAction::SaveAs { then: None }); } else if save { self.save(); }
         if zoom_in { self.canvas_state.zoom_view_center(1.25); }
         if zoom_out { self.canvas_state.zoom_view_center(1.0 / 1.25); }
         if fit { self.canvas_state.request_fit(); }
@@ -1152,7 +1152,7 @@ impl eframe::App for AsciiArtEditor {
         self.autosave(&ctx);
         self.poll_file_dialog(&ctx);
         self.poll_loading_picture(&ctx);
-        self.poll_export(&ctx);
+        self.poll_file_job(&ctx);
         self.poll_opening(&ctx);
         self.run_render_job(&ctx);
         self.handle_keyboard(&ctx);

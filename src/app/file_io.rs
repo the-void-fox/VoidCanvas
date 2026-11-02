@@ -2,55 +2,36 @@
 
 use eframe::egui;
 
-use super::{AsciiArtEditor, PendingAction, file_dialog::FileAction, storage};
+use super::{AsciiArtEditor, PendingAction, background::Writing, file_dialog::FileAction};
 use crate::document::{Color, Document, codec};
 use crate::tools::selection::text_to_content;
 
 impl AsciiArtEditor {
     /// Saves to the current file, or asks where to save it the first time.
-    pub(super) fn save(&mut self, ctx: &egui::Context) {
-        self.save_then(None, ctx);
+    pub(super) fn save(&mut self) {
+        self.save_then(None);
     }
 
     /// Like [`Self::save`], then runs `then` once the document is safely saved.
-    pub(super) fn save_then(&mut self, then: Option<PendingAction>, ctx: &egui::Context) {
+    pub(super) fn save_then(&mut self, then: Option<PendingAction>) {
         match self.doc.file_path.clone() {
-            Some(path) => {
-                if self.write_file(path)
-                    && let Some(then) = then
-                {
-                    self.perform(then, ctx);
-                }
-            }
-            None => self.choose_file(FileAction::SaveAs { then }, ctx),
+            Some(path) => self.start_writing(Writing::Document, path.into(), then),
+            None => self.choose_file(FileAction::SaveAs { then }),
         }
     }
 
-    /// Writes next to the target first and then renames, so a failed write can't wipe the old file.
-    pub(super) fn write_file(&mut self, path: String) -> bool {
-        self.finish_3d_now();
-        let (data, compressed) = match document_bytes(&self.doc) {
-            Ok(data) => data,
-            Err(e) => {
-                self.show_status(format!("Save failed: {e}"));
-                return false;
-            }
-        };
-        match storage::write_atomically(std::path::Path::new(&path), &data) {
-            Ok(()) => {
-                self.settings.add_recent(&path);
-                self.doc.file_path = Some(path);
-                self.doc.modified = false;
-                self.refresh_autosave();
-                self.autosaved_version = self.history.version();
-                let how = if compressed { "" } else { " (uncompressed)" };
-                self.show_status(format!("Saved{how}: {}", self.doc_name()));
-                true
-            }
-            Err(e) => {
-                self.show_status(format!("Save failed: {e}"));
-                false
-            }
+    /// The document in front was written to `path` (next to it first, then renamed over it, so
+    /// a failed write can't wipe the old file).
+    pub(super) fn saved(&mut self, path: String, compressed: bool, then: Option<PendingAction>, ctx: &egui::Context) {
+        self.settings.add_recent(&path);
+        self.doc.file_path = Some(path);
+        self.doc.modified = false;
+        self.refresh_autosave();
+        self.autosaved_version = self.history.version();
+        let how = if compressed { "" } else { " (uncompressed)" };
+        self.show_status(format!("Saved{how}: {}", self.doc_name()));
+        if let Some(then) = then {
+            self.perform(then, ctx);
         }
     }
 
