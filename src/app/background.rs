@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, *};
 use image::RgbaImage;
 
+use super::import::Picture;
 use super::{AsciiArtEditor, PendingAction};
 use super::file_dialog::FileAction;
 use crate::document::{Cell, Document};
@@ -48,7 +49,7 @@ enum OpenError {
 /// A picture being read for Import Image.
 pub struct LoadingPicture {
     name: String,
-    image: Receiver<Result<RgbaImage, String>>,
+    picture: Receiver<Result<Picture, String>>,
 }
 
 /// What a file job writes.
@@ -95,6 +96,8 @@ const SHOW_WAITING_AFTER: Duration = Duration::from_millis(250);
 const FAILED_DIALOG: Duration = Duration::from_millis(300);
 /// Larger pictures are scaled down once on load, so previews stay quick.
 const MAX_SOURCE_SIDE: u32 = 1024;
+/// An animation keeps only as many frames as fit in this many bytes.
+const MAX_ANIMATION_BYTES: usize = 512 << 20;
 
 impl AsciiArtEditor {
     /// Takes in rendered 3D frames and starts rendering the ones still out of date.
@@ -339,30 +342,29 @@ impl AsciiArtEditor {
         !self.opening.is_empty()
     }
 
-    /// Reads the picture on another thread; the Import Image dialog opens when it's ready.
+    /// Reads the picture on another thread (every frame of an animated GIF); the Import Image
+    /// dialog opens when it's ready.
     pub fn start_image_import(&mut self, path: &std::path::Path) {
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let path = path.to_path_buf();
-        let (send, image) = channel();
+        let (send, picture) = channel();
         std::thread::spawn(move || {
-            let read = image::open(&path).map(|image| {
-                let image = image.to_rgba8();
-                let (w, h) = image.dimensions();
-                if w.max(h) > MAX_SOURCE_SIDE {
-                    let scale = MAX_SOURCE_SIDE as f32 / w.max(h) as f32;
-                    image::imageops::thumbnail(&image, (w as f32 * scale) as u32, (h as f32 * scale) as u32)
-                } else {
-                    image
-                }
-            });
-            let _ = send.send(read.map_err(|e| e.to_string()));
+            let gif = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif"));
+            let read = if gif {
+                read_gif(&path)
+            } else {
+                image::open(&path)
+                    .map(|image| Picture { frames: vec![shrink(image.to_rgba8(), MAX_SOURCE_SIDE)], delays: vec![0], truncated: false })
+                    .map_err(|e| e.to_string())
+            };
+            let _ = send.send(read);
         });
-        self.loading_picture = Some(LoadingPicture { name, image });
+        self.loading_picture = Some(LoadingPicture { name, picture });
     }
 
     pub(super) fn poll_loading_picture(&mut self, ctx: &egui::Context) {
         let Some(loading) = &self.loading_picture else { return };
-        let read = match loading.image.try_recv() {
+        let read = match loading.picture.try_recv() {
             Ok(read) => read,
             Err(TryRecvError::Empty) => {
                 ctx.request_repaint_after(Duration::from_millis(50));
@@ -372,13 +374,37 @@ impl AsciiArtEditor {
         };
         let loading = self.loading_picture.take().unwrap();
         match read {
-            Ok(source) => self.open_image_import(loading.name, source),
+            Ok(picture) => self.open_image_import(loading.name, picture),
             Err(e) => self.show_status(format!("Can't read image: {e}")),
         }
     }
 
     /// Something the user waits for: a small window in front, so nothing else starts meanwhile.
     pub(super) fn waiting_window(&mut self, ctx: &egui::Context) {
+        if let Some(job) = &self.convert_job {
+            if job.started.elapsed() < SHOW_WAITING_AFTER {
+                ctx.request_repaint_after(SHOW_WAITING_AFTER);
+                return;
+            }
+            let (done, stopping) = (job.done.load(Ordering::Relaxed), job.stop.load(Ordering::Relaxed));
+            let text = if stopping { "Stopping…".to_owned() } else { format!("Converting {}  frame {} / {}", job.name, (done + 1).min(job.total), job.total) };
+            let mut cancel = false;
+            Modal::new(Id::new("waiting")).show(ctx, |ui| {
+                ui.set_width(320.0);
+                ui.horizontal(|ui| {
+                    ui.add(Spinner::new().size(18.0).color(theme::ACCENT));
+                    ui.label(text);
+                });
+                ui.add_space(6.0);
+                ui.add(ProgressBar::new(done as f32 / job.total.max(1) as f32).desired_height(10.0).fill(theme::ACCENT_STRONG));
+                ui.add_space(6.0);
+                cancel = ui.add_enabled(!stopping, Button::new("Cancel")).clicked();
+            });
+            if cancel {
+                job.stop.store(true, Ordering::Relaxed);
+            }
+            return;
+        }
         if let Some(job) = &self.file_job {
             if job.started.elapsed() < SHOW_WAITING_AFTER {
                 ctx.request_repaint_after(SHOW_WAITING_AFTER);
@@ -448,6 +474,42 @@ impl AsciiArtEditor {
 
     /// Is something running that the user waits for (the waiting window is up)?
     pub(super) fn waiting(&self) -> bool {
-        self.loading_picture.is_some() || self.pending_dialog.is_some() || self.file_job.is_some()
+        self.loading_picture.is_some() || self.pending_dialog.is_some() || self.file_job.is_some() || self.convert_job.is_some()
     }
+}
+
+/// `image` made no larger than `side` on its longer side.
+fn shrink(image: RgbaImage, side: u32) -> RgbaImage {
+    let (w, h) = image.dimensions();
+    if w.max(h) <= side { return image; }
+    let scale = side as f32 / w.max(h) as f32;
+    image::imageops::thumbnail(&image, ((w as f32 * scale) as u32).max(1), ((h as f32 * scale) as u32).max(1))
+}
+
+/// Every frame of a GIF, as it looks on screen (each one drawn over what the ones before left),
+/// and how long each shows.
+fn read_gif(path: &std::path::Path) -> Result<Picture, String> {
+    use image::AnimationDecoder;
+    let file = std::io::BufReader::new(std::fs::File::open(path).map_err(|e| e.to_string())?);
+    let decoder = image::codecs::gif::GifDecoder::new(file).map_err(|e| e.to_string())?;
+    let mut picture = Picture { frames: Vec::new(), delays: Vec::new(), truncated: false };
+    let mut bytes = 0;
+    for frame in decoder.into_frames() {
+        let frame = frame.map_err(|e| e.to_string())?;
+        let (numer, denom) = frame.delay().numer_denom_ms();
+        // Like browsers: no delay, or a tiny one, shows for a tenth of a second.
+        let ms = numer / denom.max(1);
+        picture.delays.push(if ms <= 10 { 100 } else { ms });
+        let image = shrink(frame.into_buffer(), MAX_SOURCE_SIDE);
+        bytes += image.len();
+        picture.frames.push(image);
+        if bytes > MAX_ANIMATION_BYTES {
+            picture.truncated = true;
+            break;
+        }
+    }
+    if picture.frames.is_empty() {
+        return Err("the GIF has no frames".into());
+    }
+    Ok(picture)
 }

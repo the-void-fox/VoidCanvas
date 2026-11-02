@@ -129,6 +129,8 @@ pub struct AsciiArtEditor {
     autosave_writer: storage::AutosaveWriter,
     /// The Import Image dialog, while open.
     pub(crate) image_import: Option<import::ImageImport>,
+    /// The frames of an animation being converted for import.
+    convert_job: Option<import::ConvertJob>,
     /// The Replace window, while open.
     replace: Option<replace::ReplaceDialog>,
     /// The Insert Banner window, while open.
@@ -209,6 +211,7 @@ impl Default for AsciiArtEditor {
             recovery_loading: None,
             autosave_writer: storage::AutosaveWriter::default(),
             image_import:   None,
+            convert_job:    None,
             replace:        None,
             banner:         None,
             file_browser:   None,
@@ -1152,6 +1155,7 @@ impl eframe::App for AsciiArtEditor {
         self.autosave(&ctx);
         self.poll_file_dialog(&ctx);
         self.poll_loading_picture(&ctx);
+        self.poll_convert_job(&ctx);
         self.poll_file_job(&ctx);
         self.poll_opening(&ctx);
         self.run_render_job(&ctx);

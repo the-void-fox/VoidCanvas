@@ -761,6 +761,99 @@ mod ui {
         assert_eq!(app.doc.active_layer().get(0, 0).unwrap().ch, '█', "a flat colour becomes full half-block pixels");
     }
 
+    /// An animated GIF with a frame of each colour.
+    fn write_test_gif(path: &std::path::Path, colors: &[[u8; 3]], delays: &[u32]) {
+        use image::codecs::gif::{GifEncoder, Repeat};
+        let mut encoder = GifEncoder::new(std::fs::File::create(path).unwrap());
+        encoder.set_repeat(Repeat::Infinite).unwrap();
+        for (&[r, g, b], &ms) in colors.iter().zip(delays) {
+            let picture = image::RgbaImage::from_pixel(40, 20, image::Rgba([r, g, b, 255]));
+            encoder.encode_frame(image::Frame::from_parts(picture, 0, 0, image::Delay::from_numer_denom_ms(ms, 1))).unwrap();
+        }
+    }
+
+    /// Opens the Import Image dialog for `path` and waits for it.
+    fn start_import(harness: &mut Harness<'static, AsciiArtEditor>, path: &std::path::Path) {
+        harness.state_mut().open_path(path);
+        for _ in 0..400 {
+            harness.step();
+            if harness.state().image_import.is_some() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // The modal measures itself in its first frame.
+        harness.step();
+        harness.step();
+        assert!(harness.state().image_import.is_some(), "the import dialog is open");
+    }
+
+    fn wait_for_converting(harness: &mut Harness<'static, AsciiArtEditor>) {
+        for _ in 0..1000 {
+            if !harness.state().converting() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            harness.step();
+        }
+        assert!(!harness.state().converting(), "the frames weren't converted");
+        harness.step();
+    }
+
+    #[test]
+    fn an_animated_gif_comes_in_frame_by_frame() {
+        let path = std::env::temp_dir().join(format!("void-canvas-anim-{}.gif", std::process::id()));
+        write_test_gif(&path, &[[255, 0, 0], [0, 255, 0], [0, 0, 255]], &[50, 100, 200]);
+        let red_green_blue = |doc: &crate::document::Document, layer: usize, first: usize| {
+            for (i, channel) in [0, 1, 2].into_iter().enumerate() {
+                let cell = &doc.layers[layer].cells_in(first + i)[0];
+                let fg = [cell.fg.r, cell.fg.g, cell.fg.b];
+                assert!(cell.ch == '█' && fg[channel] > 200, "frame {}: {cell:?}", first + i);
+            }
+        };
+
+        // Into a still picture: a layer of three frames, with the GIF's timing.
+        let mut harness = harness();
+        start_import(&mut harness, &path);
+        assert!(harness.query_by_label("All 3 frames").is_some());
+        harness.get_by_label("Import as layer").click();
+        harness.step();
+        wait_for_converting(&mut harness);
+        let app = harness.state();
+        assert_eq!((app.doc.layers.len(), app.doc.frame_count(), app.doc.frame), (2, 3, 0));
+        assert_eq!(app.doc.durations, vec![50, 100, 200]);
+        red_green_blue(&app.doc, 1, 0);
+        assert_eq!(app.history.labels().0, vec!["Import Animation"]);
+        let app = harness.state_mut();
+        app.history.undo(&mut app.doc);
+        assert_eq!((app.doc.layers.len(), app.doc.frame_count()), (1, 1), "one step undoes it all");
+        assert_eq!(app.doc.durations, vec![100]);
+
+        // Into an animation, from the frame in view: frames are added at the end as needed.
+        let ctx = harness.ctx.clone();
+        harness.state_mut().run(crate::app::commands::Action::NewFrame, &ctx);
+        harness.step();
+        assert_eq!((harness.state().doc.frame_count(), harness.state().doc.frame), (2, 1));
+        start_import(&mut harness, &path);
+        harness.get_by_label("Import as layer").click();
+        harness.step();
+        wait_for_converting(&mut harness);
+        let app = harness.state();
+        assert_eq!((app.doc.frame_count(), app.doc.frame), (4, 1));
+        assert_eq!(app.doc.durations, vec![100, 100, 100, 200], "the frames there keep their timing");
+        assert!(app.doc.layers[1].cells_in(0).iter().all(|c| c.is_empty()));
+        red_green_blue(&app.doc, 1, 1);
+
+        // As an animation of its own.
+        start_import(&mut harness, &path);
+        harness.get_by_label("New animation").click();
+        harness.step();
+        wait_for_converting(&mut harness);
+        std::fs::remove_file(&path).unwrap();
+        let app = harness.state();
+        assert_eq!(app.tab_count(), 2);
+        assert_eq!((app.doc.width, app.doc.height, app.doc.frame_count()), (80, 20, 3));
+        assert_eq!(app.doc.durations, vec![50, 100, 200]);
+        assert!(app.doc.modified && app.doc.file_path.is_none());
+        red_green_blue(&app.doc, 0, 0);
+    }
+
     #[test]
     fn replace_all_from_the_dialog() {
         let mut harness = harness();
