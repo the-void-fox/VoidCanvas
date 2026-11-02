@@ -334,7 +334,7 @@ impl AsciiArtEditor {
             }
             Some(false) => {
                 self.recovery = None;
-                super::storage::Autosave::remove();
+                self.autosave_writer.keep(Vec::new());
             }
             None => {}
         }

@@ -152,7 +152,12 @@ impl AsciiArtEditor {
 
     /// Writes every unsaved document to the recovery file now (or removes it when all are saved).
     pub(super) fn refresh_autosave(&mut self) {
-        storage::Autosave::write(&self.documents().filter(|doc| doc.modified).collect::<Vec<_>>());
+        let unsaved = self
+            .documents()
+            .filter(|doc| doc.modified)
+            .map(|doc| storage::SavedDocument { file_path: doc.file_path.clone(), document: doc.clone() })
+            .collect();
+        self.autosave_writer.keep(unsaved);
         self.autosaved_version = self.history.version();
         for tab in self.tabs.iter_mut().flatten() {
             tab.autosaved_version = tab.history.version();

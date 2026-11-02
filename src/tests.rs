@@ -1966,6 +1966,36 @@ mod file_format {
         let loaded = parse_document(&json).unwrap();
         assert!(codec::same_content(&doc, &loaded));
     }
+
+    #[test]
+    fn recovery_files_keep_every_document_compactly() {
+        use crate::app::storage::{Autosave, SavedDocument};
+        let mut doc = Document::new(40, 20);
+        for x in 0..40 {
+            doc.layers[0].set(x, x / 2, Cell::new('#', Color::new(200, x as u8 * 6, 40, 255), Color::TRANSPARENT));
+        }
+        let docs = vec![
+            SavedDocument { file_path: Some("/art/лиса.vc".into()), document: doc.clone() },
+            SavedDocument { file_path: None, document: Document::new(3, 3) },
+        ];
+        let bytes = Autosave::to_bytes(&docs);
+        let json = serde_json::to_vec(&doc).unwrap().len();
+        assert!(bytes.len() * 20 < json, "{} bytes, JSON {json}", bytes.len());
+        let back = Autosave::from_bytes(&bytes).unwrap();
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].file_path.as_deref(), Some("/art/лиса.vc"));
+        assert!(codec::same_content(&back[0].document, &doc));
+        assert_eq!((back[1].file_path.as_deref(), back[1].document.width), (None, 3));
+
+        // A damaged document is left out; the others are still offered back.
+        let mut damaged = bytes.clone();
+        *damaged.last_mut().unwrap() ^= 0xFF;
+        assert_eq!(Autosave::from_bytes(&damaged).unwrap().len(), 1);
+
+        // Recovery files written before 2.1 were JSON.
+        let old = serde_json::to_string(&Autosave { documents: docs, age: None }).unwrap();
+        assert_eq!(Autosave::from_bytes(old.as_bytes()).unwrap().len(), 2);
+    }
 }
 
 mod blending {

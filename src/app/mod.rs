@@ -124,6 +124,9 @@ pub struct AsciiArtEditor {
     pub(crate) settings: storage::Settings,
     /// Unsaved work from a run that crashed, waiting for "Recover?".
     pub(crate) recovery: Option<storage::Autosave>,
+    /// The recovery file being read at start-up (a big one takes a while).
+    recovery_loading: Option<std::sync::mpsc::Receiver<Option<storage::Autosave>>>,
+    autosave_writer: storage::AutosaveWriter,
     /// The Import Image dialog, while open.
     pub(crate) image_import: Option<import::ImageImport>,
     /// The Replace window, while open.
@@ -203,6 +206,8 @@ impl Default for AsciiArtEditor {
             window_title:   String::new(),
             settings:       storage::Settings::default(),
             recovery:       None,
+            recovery_loading: None,
+            autosave_writer: storage::AutosaveWriter::default(),
             image_import:   None,
             replace:        None,
             banner:         None,
@@ -235,9 +240,13 @@ impl AsciiArtEditor {
         theme::install(&cc.egui_ctx);
         // Ctrl +/-/0 zoom the canvas, not the whole UI.
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        let (send, recovery) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(storage::Autosave::load());
+        });
         Self {
             settings: storage::Settings::load(),
-            recovery: storage::Autosave::load(),
+            recovery_loading: Some(recovery),
             ..Self::default()
         }
     }
@@ -1005,6 +1014,19 @@ impl AsciiArtEditor {
     /// Replaces the document (new / opened file): fresh history, no selection, canvas re-centred.
     /// Writes unsaved work to the recovery file a little while after it changed.
     fn autosave(&mut self, ctx: &egui::Context) {
+        // The recovery file from last time is still being read, or offered back: keep it until then.
+        if let Some(loading) = &self.recovery_loading {
+            match loading.try_recv() {
+                Ok(recovery) => self.recovery = self.recovery.take().or(recovery),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after_secs(0.1);
+                    return;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            }
+            self.recovery_loading = None;
+        }
+        if self.recovery.is_some() { return; }
         let now = ctx.input(|i| i.time);
         if !self.autosave_due() {
             self.last_autosave = now;
@@ -1081,7 +1103,7 @@ impl AsciiArtEditor {
             self.request(PendingAction::Quit, ctx);
         } else {
             // A clean exit: nothing to recover next time.
-            storage::Autosave::remove();
+            self.autosave_writer.finish_and_remove();
         }
     }
 

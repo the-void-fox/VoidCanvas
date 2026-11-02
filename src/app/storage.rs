@@ -1,6 +1,8 @@
 //! Things kept between runs: settings (recent files) and the crash-recovery autosave.
 
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Sender, channel};
+use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
@@ -159,6 +161,41 @@ impl Settings {
     }
 }
 
+/// Writes the recovery file on a thread of its own, so a big animation doesn't stop the editor
+/// every time. Versions are written in turn; one still waiting when a newer one comes is skipped.
+#[derive(Default)]
+pub struct AutosaveWriter {
+    worker: Option<(Sender<Vec<SavedDocument>>, JoinHandle<()>)>,
+}
+
+impl AutosaveWriter {
+    /// Keeps `docs` (copies of the unsaved documents), or removes the recovery file if there are none.
+    pub fn keep(&mut self, docs: Vec<SavedDocument>) {
+        let (versions, _) = self.worker.get_or_insert_with(|| {
+            let (send, versions) = channel::<Vec<SavedDocument>>();
+            let thread = std::thread::spawn(move || {
+                while let Ok(mut docs) = versions.recv() {
+                    while let Ok(newer) = versions.try_recv() {
+                        docs = newer;
+                    }
+                    Autosave::write(&docs);
+                }
+            });
+            (send, thread)
+        });
+        let _ = versions.send(docs);
+    }
+
+    /// A clean exit: waits for the writes under way, then removes the recovery file.
+    pub fn finish_and_remove(&mut self) {
+        if let Some((versions, thread)) = self.worker.take() {
+            drop(versions);
+            let _ = thread.join();
+        }
+        Autosave::remove();
+    }
+}
+
 /// One document kept by the autosave.
 #[derive(Serialize, Deserialize)]
 pub struct SavedDocument {
@@ -176,44 +213,86 @@ pub struct Autosave {
     pub age: Option<Duration>,
 }
 
+/// Recovery files start with this; older ones were JSON (and still load).
+const AUTOSAVE_MAGIC: &[u8; 8] = b"VCAUTOSV";
+
 impl Autosave {
     fn path() -> Option<PathBuf> {
         config_dir().map(|dir| dir.join("autosave.vc"))
     }
 
     /// Keeps `docs`, or removes the recovery file when there is nothing unsaved.
-    pub fn write(docs: &[&Document]) {
+    fn write(docs: &[SavedDocument]) {
         if docs.is_empty() {
             return Self::remove();
         }
-        let documents = docs
-            .iter()
-            .map(|doc| SavedDocument { file_path: doc.file_path.clone(), document: (*doc).clone() })
-            .collect();
-        let autosave = Autosave { documents, age: None };
-        if let (Some(path), Ok(data)) = (Self::path(), serde_json::to_string(&autosave)) {
-            let _ = write_atomically(&path, &data);
+        if let Some(path) = Self::path() {
+            let _ = write_atomically(&path, Self::to_bytes(docs));
         }
+    }
+
+    /// `VCAUTOSV`, the number of documents, then each one's path (empty if it has none) and
+    /// its bytes as a `.vc` file, both after their length (4 bytes, little-endian).
+    pub(crate) fn to_bytes(docs: &[SavedDocument]) -> Vec<u8> {
+        let mut out = AUTOSAVE_MAGIC.to_vec();
+        let part = |out: &mut Vec<u8>, bytes: &[u8]| {
+            out.extend((bytes.len() as u32).to_le_bytes());
+            out.extend(bytes);
+        };
+        out.extend((docs.len() as u32).to_le_bytes());
+        for saved in docs {
+            part(&mut out, saved.file_path.as_deref().unwrap_or("").as_bytes());
+            part(&mut out, &super::file_io::document_bytes(&saved.document).map(|(bytes, _)| bytes).unwrap_or_default());
+        }
+        out
+    }
+
+    /// The documents in a recovery file; a damaged one is left out, the others are kept.
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Option<Vec<SavedDocument>> {
+        if !bytes.starts_with(AUTOSAVE_MAGIC) {
+            // Before 2.1 the file was JSON; before tabs, it held a single document.
+            let text = std::str::from_utf8(bytes).ok()?;
+            let mut documents = serde_json::from_str::<Autosave>(text)
+                .map(|autosave| autosave.documents)
+                .ok()
+                .or_else(|| Some(vec![serde_json::from_str::<SavedDocument>(text).ok()?]))?;
+            documents.retain_mut(|saved| saved.document.validate().is_ok());
+            return Some(documents);
+        }
+        fn take<'a>(rest: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
+            let (part, after) = rest.split_at_checked(n)?;
+            *rest = after;
+            Some(part)
+        }
+        fn part<'a>(rest: &mut &'a [u8]) -> Option<&'a [u8]> {
+            let len = u32::from_le_bytes(take(rest, 4)?.try_into().ok()?);
+            take(rest, len as usize)
+        }
+        let mut rest = bytes.strip_prefix(AUTOSAVE_MAGIC.as_slice())?;
+        let count = u32::from_le_bytes(take(&mut rest, 4)?.try_into().ok()?);
+        let mut docs = Vec::new();
+        for _ in 0..count {
+            let path = String::from_utf8(part(&mut rest)?.to_vec()).ok()?;
+            if let Ok(document) = super::file_io::parse_document(part(&mut rest)?) {
+                docs.push(SavedDocument { file_path: (!path.is_empty()).then_some(path), document });
+            }
+        }
+        Some(docs)
     }
 
     /// The autosave left by a run that didn't exit cleanly.
     pub fn load() -> Option<Self> {
         let path = Self::path()?;
-        let data = std::fs::read_to_string(&path).ok()?;
-        // Before tabs, the file held a single document.
-        let mut autosave = serde_json::from_str::<Autosave>(&data).ok().or_else(|| {
-            let single = serde_json::from_str::<SavedDocument>(&data).ok()?;
-            Some(Autosave { documents: vec![single], age: None })
-        })?;
-        autosave.documents.retain_mut(|saved| saved.document.validate().is_ok());
-        if autosave.documents.is_empty() {
+        let data = std::fs::read(&path).ok()?;
+        let documents = Self::from_bytes(&data)?;
+        if documents.is_empty() {
             return None;
         }
-        autosave.age = std::fs::metadata(&path)
+        let age = std::fs::metadata(&path)
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| SystemTime::now().duration_since(t).ok());
-        Some(autosave)
+        Some(Autosave { documents, age })
     }
 
     pub fn remove() {
