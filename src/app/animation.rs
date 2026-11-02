@@ -320,6 +320,14 @@ impl AsciiArtEditor {
         for f in 0..frames {
             let r = header(f);
             let current = f == doc.frame;
+            // Only the columns in view: a long animation has hundreds, and each cel's dot looks
+            // through the cel's cells.
+            if !ui.is_rect_visible(Rect::from_x_y_ranges(r.x_range(), rect.y_range())) {
+                if self.playback.playing && current {
+                    ui.scroll_to_rect(r, None);
+                }
+                continue;
+            }
             let resp = ui.interact(r, ui.id().with(("frame", f)), Sense::click_and_drag());
             if self.playback.selected.len() > 1 && self.playback.selected.contains(&f) {
                 painter.rect_filled(r.shrink(2.0), 4.0, theme::ACCENT_SOFT);
