@@ -241,6 +241,17 @@ mod ui {
         harness
     }
 
+    /// Steps until the documents being opened are in their tabs (they are read on another thread).
+    fn wait_for_opening(harness: &mut Harness<AsciiArtEditor>) {
+        for _ in 0..500 {
+            if !harness.state().opening_files() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            harness.step();
+        }
+        assert!(!harness.state().opening_files(), "the documents didn't open");
+        harness.step();
+    }
+
     fn cell_pos(harness: &Harness<AsciiArtEditor>, x: usize, y: usize) -> Pos2 {
         harness.state().canvas_state.screen_cell_rect(x, y).center()
     }
@@ -1024,6 +1035,7 @@ mod ui {
         harness.step();
         harness.get_by_role_and_label(Role::Button, "Open").click();
         harness.step();
+        wait_for_opening(&mut harness);
         let app = harness.state();
         assert!(app.file_browser.is_none());
         assert_eq!((app.doc.width, app.doc.height), (3, 1));
@@ -1062,6 +1074,39 @@ mod ui {
         std::fs::write(path, serde_json::to_string(&doc).unwrap()).unwrap();
     }
 
+    /// A document is read on another thread, and doesn't jump in front in the middle of a stroke.
+    #[test]
+    fn documents_open_in_the_background() {
+        let dir = temp_folder("background_open");
+        let a = dir.join("a.vc");
+        write_doc(&a, 'A');
+        let mut harness = harness();
+        harness.state_mut().drawing = true;
+        harness.state_mut().open_path(&a);
+        assert!(harness.state().opening_files());
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            harness.step();
+        }
+        assert!(harness.state().opening_files(), "it waits for the stroke to end");
+        assert!(harness.query_by_label("a.vc").is_some(), "a tab with a spinner stands in for it");
+        assert_eq!(glyph_at(&harness, 0, 0), ' ');
+
+        harness.state_mut().drawing = false;
+        wait_for_opening(&mut harness);
+        assert_eq!(glyph_at(&harness, 0, 0), 'A');
+        assert!(harness.state().doc.file_path.as_deref().is_some_and(|p| p.ends_with("a.vc")));
+
+        // A damaged file says so, and nothing opens.
+        let broken = dir.join("broken.vc");
+        std::fs::write(&broken, "VOIDCANV\x03 not really").unwrap();
+        harness.state_mut().open_path(&broken);
+        wait_for_opening(&mut harness);
+        assert_eq!(harness.state().tab_count(), 1);
+        assert!(harness.state().status_msg.starts_with("Can't open file"), "{}", harness.state().status_msg);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn files_open_in_tabs_with_their_own_history() {
         let dir = temp_folder("tabs");
@@ -1071,7 +1116,7 @@ mod ui {
         let mut harness = harness();
         harness.state_mut().open_path(&a);
         harness.state_mut().open_path(&b);
-        harness.step();
+        wait_for_opening(&mut harness);
         assert_eq!(harness.state().tab_count(), 2, "the untouched start-up tab was reused");
         assert_eq!(glyph_at(&harness, 0, 0), 'B');
 
@@ -2723,6 +2768,11 @@ fn render_window() {
             }
             app
         });
+    // The document is read on another thread.
+    while harness.state().opening_files() {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        harness.step();
+    }
     for _ in 0..5 {
         harness.step();
     }

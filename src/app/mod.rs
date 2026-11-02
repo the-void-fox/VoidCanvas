@@ -147,6 +147,8 @@ pub struct AsciiArtEditor {
     pending_dialog: Option<background::PendingDialog>,
     /// A picture being read for Import Image.
     loading_picture: Option<background::LoadingPicture>,
+    /// Documents being read, in the order they were opened.
+    opening: Vec<background::OpeningFile>,
     /// A PNG or GIF being written.
     export_job: Option<background::ExportJob>,
     /// The Library window, while open.
@@ -215,6 +217,7 @@ impl Default for AsciiArtEditor {
             pending_dialog: None,
             loading_picture: None,
             export_job: None,
+            opening: Vec::new(),
             style_before:   None,
             brush_save_name: String::new(),
             active_tab:     0,
@@ -1128,6 +1131,7 @@ impl eframe::App for AsciiArtEditor {
         self.poll_file_dialog(&ctx);
         self.poll_loading_picture(&ctx);
         self.poll_export(&ctx);
+        self.poll_opening(&ctx);
         self.run_render_job(&ctx);
         self.handle_keyboard(&ctx);
         self.advance_playback(&ctx);

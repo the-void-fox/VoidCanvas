@@ -1,5 +1,6 @@
 //! Work done off the UI thread, so the window keeps answering: rendering 3D layers, the system
-//! file dialog, reading pictures and exporting images. A small window shows what is going on meanwhile.
+//! file dialog, opening documents, reading pictures and exporting images. A small window (or, for
+//! documents, a tab with a spinner) shows what is going on meanwhile.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use image::RgbaImage;
 
 use super::AsciiArtEditor;
 use super::file_dialog::FileAction;
-use crate::document::Cell;
+use crate::document::{Cell, Document};
 use crate::{export, theme};
 
 /// 3D frames being rendered in the background.
@@ -30,6 +31,18 @@ pub struct PendingDialog {
     pub suggested: String,
     started: Instant,
     picked: Receiver<Option<PathBuf>>,
+}
+
+/// A document file being read and decoded.
+pub struct OpeningFile {
+    /// The path as given: for the tab, the recent files and messages.
+    pub path: String,
+    document: Receiver<Result<Document, OpenError>>,
+}
+
+enum OpenError {
+    Unreadable(String),
+    Damaged(String),
 }
 
 /// A picture being read for Import Image.
@@ -225,6 +238,59 @@ impl AsciiArtEditor {
                 self.open_file_browser(pending.action, pending.suggested);
             }
         }
+    }
+
+    /// Reads and decodes a `.vc` file on another thread; it opens in a tab when it's ready, and
+    /// the editor can be used meanwhile.
+    pub(super) fn start_opening(&mut self, path: &std::path::Path) {
+        let shown = path.to_string_lossy().to_string();
+        if self.opening.iter().any(|o| o.path == shown) { return; }
+        let path = path.to_path_buf();
+        let (send, document) = channel();
+        std::thread::spawn(move || {
+            let read = std::fs::read(&path)
+                .map_err(|e| OpenError::Unreadable(e.to_string()))
+                .and_then(|data| super::file_io::parse_document(&data).map_err(OpenError::Damaged));
+            let _ = send.send(read);
+        });
+        self.opening.push(OpeningFile { path: shown, document });
+    }
+
+    pub(super) fn poll_opening(&mut self, ctx: &egui::Context) {
+        // In the order they were asked for, so the tabs line up that way; not in the middle of a
+        // stroke, which a new tab in front would cut off.
+        while let Some(first) = self.opening.first()
+            && !self.drawing
+        {
+            let read = match first.document.try_recv() {
+                Ok(read) => read,
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => Err(OpenError::Damaged("the reader stopped".into())),
+            };
+            let opening = self.opening.remove(0);
+            match read {
+                Ok(mut doc) => {
+                    doc.file_path = Some(opening.path.clone());
+                    self.open_in_tab(doc);
+                    self.settings.add_recent(&opening.path);
+                    self.show_status(format!("Opened: {}", self.doc_name()));
+                }
+                Err(OpenError::Unreadable(e)) => {
+                    self.settings.forget_recent(&opening.path);
+                    self.show_status(format!("Failed to read file: {e}"));
+                }
+                Err(OpenError::Damaged(e)) => self.show_status(format!("Can't open file: {e}")),
+            }
+        }
+        if !self.opening.is_empty() {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+    }
+
+    /// Are documents still being read?
+    #[cfg(test)]
+    pub(crate) fn opening_files(&self) -> bool {
+        !self.opening.is_empty()
     }
 
     /// Reads the picture on another thread; the Import Image dialog opens when it's ready.

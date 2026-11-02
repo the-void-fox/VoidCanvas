@@ -54,8 +54,8 @@ impl AsciiArtEditor {
         }
     }
 
-    /// Loads a `.vc` file (or imports a `.txt` one), replacing the current document.
-    /// Problems are reported in the status bar.
+    /// Opens a `.vc` file in a new tab (in the background), imports a `.txt` one, or hands a
+    /// picture or a 3D model to its importer. Problems are reported in the status bar.
     pub fn open_path(&mut self, path: &std::path::Path) {
         if super::import::is_image(path) {
             self.start_image_import(path);
@@ -71,29 +71,18 @@ impl AsciiArtEditor {
             self.show_status(format!("{} is already open", self.doc_name()));
             return;
         }
-        let data = match std::fs::read(path) {
-            Ok(data) => data,
+        if !path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("txt")) {
+            // A big animation takes a while to decode: it opens in the background.
+            self.start_opening(path);
+            return;
+        }
+        match std::fs::read(path) {
+            Ok(data) => self.import_text(path, &String::from_utf8_lossy(&data)),
             Err(e) => {
                 self.settings.forget_recent(&shown);
                 self.show_status(format!("Failed to read file: {e}"));
-                return;
             }
-        };
-        if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("txt")) {
-            self.import_text(path, &String::from_utf8_lossy(&data));
-            return;
         }
-        let mut doc = match parse_document(&data) {
-            Ok(doc) => doc,
-            Err(e) => {
-                self.show_status(format!("Can't open file: {e}"));
-                return;
-            }
-        };
-        doc.file_path = Some(shown.clone());
-        self.open_in_tab(doc);
-        self.settings.add_recent(&shown);
-        self.show_status(format!("Opened: {}", self.doc_name()));
     }
 
     /// A text file becomes a new document just big enough for it.

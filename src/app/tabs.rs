@@ -214,6 +214,21 @@ impl AsciiArtEditor {
                                 switch = Some(i);
                             }
                         }
+                        // Files still being read: a spinner where their tabs will be.
+                        for (i, opening) in self.opening.iter().enumerate() {
+                            let name = std::path::Path::new(&opening.path).file_name().map_or(opening.path.clone(), |n| n.to_string_lossy().to_string());
+                            ui.scope_builder(UiBuilder::new().id(Id::new(("opening", i))).sense(Sense::hover()), |ui| {
+                                Frame::new().inner_margin(Margin { left: 12, right: 12, top: 5, bottom: 5 }).show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 6.0;
+                                        ui.add(Spinner::new().size(12.0).color(theme::ACCENT));
+                                        ui.add(Label::new(RichText::new(name).color(theme::TEXT_FAINT)).selectable(false));
+                                    });
+                                });
+                            })
+                            .response
+                            .on_hover_text(format!("Opening {}…", opening.path));
+                        }
                         ui.add_space(4.0);
                         new = icon_button(ui, icons::PLUS, 22.0, false, "New document  (Ctrl+N)").clicked();
                     });
