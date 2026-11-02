@@ -839,6 +839,60 @@ mod ui {
         assert!(changed.is_empty(), "{changed:#?}");
     }
 
+    /// Going up folders in the built-in chooser: the lists change, their widgets keep their ids
+    /// (a scroll area named after the folder used to get a new id, and a red outline, each time).
+    #[test]
+    fn going_up_folders_keeps_the_chooser_ids() {
+        let warnings = capture_warnings();
+        let dir = temp_folder("updown");
+        let deep = dir.join("a").join("b");
+        std::fs::create_dir_all(&deep).unwrap();
+        // Forty entries in each folder: their scrollbars stand in the same place.
+        for i in 0..39 {
+            std::fs::write(dir.join(format!("art{i}.vc")), "").unwrap();
+            std::fs::write(dir.join("a").join(format!("mid{i}.vc")), "").unwrap();
+            std::fs::write(deep.join(format!("deep{i}.vc")), "").unwrap();
+        }
+        std::fs::write(deep.join("last.vc"), "").unwrap();
+        let mut harness = harness();
+        harness.state_mut().last_dir = Some(deep.clone());
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::O);
+        harness.step();
+        harness.step();
+        for _ in 0..2 {
+            // The chooser's button: the last one drawn (the layer panel has an arrow too).
+            harness.get_all_by_label(crate::icons::ARROW_UP).last().unwrap().click();
+            for _ in 0..3 {
+                harness.step();
+            }
+        }
+        let browser = harness.state().file_browser.as_ref().expect("the chooser is open");
+        assert_eq!(browser.dir.canonicalize().unwrap(), dir.canonicalize().unwrap());
+        let changed: Vec<String> = warnings.lock().unwrap().iter().filter(|w| w.contains("changed id")).cloned().collect();
+        assert!(changed.is_empty(), "{changed:#?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_chooser_tree_leads_to_neighbouring_folders() {
+        let dir = temp_folder("tree");
+        let deep = dir.join("a").join("b");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::create_dir(dir.join("a").join("sibling")).unwrap();
+        let mut harness = harness();
+        harness.state_mut().last_dir = Some(deep.clone());
+        harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::O);
+        for _ in 0..4 {
+            harness.step();
+        }
+        // The tree is open down to "b", so the folder next to it shows; a click goes there.
+        harness.get_by_label(&format!("{}  sibling", crate::icons::FOLDER)).click();
+        harness.step();
+        let browser = harness.state().file_browser.as_ref().expect("the chooser is open");
+        assert_eq!(browser.dir.canonicalize().unwrap(), dir.join("a").join("sibling").canonicalize().unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// Collects `log` warnings from now on (one logger for the whole test run).
     fn capture_warnings() -> &'static std::sync::Mutex<Vec<String>> {
         struct Capture;
@@ -2570,6 +2624,32 @@ mod minor_fixes {
 
 /// Renders the whole window offscreen, e.g. for the README screenshot:
 /// `SHOT_DOC=art.vc SHOT_OUT=shot.png cargo test render_window -- --ignored`
+mod file_chooser {
+    use std::path::{Path, PathBuf};
+
+    use crate::app::file_dialog::{natural_order, user_dirs};
+
+    #[test]
+    fn file_names_sort_as_people_read_them() {
+        let mut names = vec!["art10.vc", "b.vc", "Art2.vc", "art1.vc", "art02b.vc"];
+        names.sort_by(|a, b| natural_order(a, b));
+        assert_eq!(names, ["art1.vc", "Art2.vc", "art02b.vc", "art10.vc", "b.vc"]);
+    }
+
+    #[test]
+    fn localised_user_folders_are_found() {
+        let text = "# written by xdg-user-dirs-update\n\
+            XDG_DESKTOP_DIR=\"$HOME/Рабочий стол\"\n\
+            XDG_DOWNLOAD_DIR=\"$HOME/Загрузки\"\n\
+            XDG_MUSIC_DIR=\"/media/music\"\n";
+        let dirs = user_dirs(text, Path::new("/home/fox"));
+        assert_eq!(dirs.len(), 3);
+        assert_eq!(dirs["DESKTOP"], PathBuf::from("/home/fox/Рабочий стол"));
+        assert_eq!(dirs["DOWNLOAD"], PathBuf::from("/home/fox/Загрузки"));
+        assert_eq!(dirs["MUSIC"], PathBuf::from("/media/music"));
+    }
+}
+
 #[test]
 #[ignore = "needs a GPU; run by hand"]
 fn render_window() {
