@@ -428,7 +428,11 @@ pub(crate) fn draw_cell(painter: &Painter, rect: Rect, ch: char, fg: Color32, bg
         painter.rect_filled(rect, 0.0, bg);
     }
     if ch != ' ' && !glyph_render::draw(painter, ch, rect, fg, strokes) {
-        painter.text(rect.center(), Align2::CENTER_CENTER, ch, font_id.clone(), fg);
+        // Laid out without a colour and tinted when painted: egui keeps one layout per glyph
+        // instead of one per glyph and colour (an animation of many colours would lay out
+        // every cell again on each frame).
+        let galley = painter.layout_no_wrap(ch.to_string(), font_id.clone(), Color32::PLACEHOLDER);
+        painter.galley(rect.center() - galley.size() / 2.0, galley, fg);
     }
 }
 
