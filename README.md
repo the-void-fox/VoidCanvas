@@ -28,7 +28,7 @@ A terminal-aesthetic ASCII art editor built with Rust, [egui](https://github.com
 | **Scripting** | Edit → Script…: small [Rhai](https://rhai.rs) programs draw on the active layer (cells, text, lines, colours, noise, random, frames); examples included, `Ctrl+Enter` runs, a whole run is one undo step; **Use as Brush** paints with a script's `fn brush(x, y, dx, dy)` |
 | **Tabs** | Several documents at once, each with its own undo history, view and selection; `Ctrl+Tab` switches, `Ctrl+W` closes, quitting asks about each unsaved tab |
 | **Command palette** | `Ctrl+Shift+P` / `F1`: fuzzy-search every menu action, tool, layer action, palette and recent file; recently used commands come first |
-| **Files** | Compact native `.vc` format ([see below](#file-format)), `.txt` import / export, **ANSI** (24-bit colour) and **HTML** export, **PNG** export (opaque or transparent), animated **GIF** export, copy as text / ANSI, recent files, drag & drop, autosave of every unsaved tab with crash recovery |
+| **Files** | Compact native `.vc` format ([see below](#file-format)), `.txt` import / export, **ANSI** (24-bit colour) and **HTML** export, **PNG** export (opaque or transparent), animated **GIF** export (in the background with a progress window and Cancel; frames are encoded on every core), copy as text / ANSI, recent files, drag & drop, autosave of every unsaved tab with crash recovery |
 
 ---
 
@@ -232,7 +232,8 @@ To re-render the README screenshot offscreen:
 | [eframe](https://crates.io/crates/eframe) | Native window / app shell |
 | [serde](https://crates.io/crates/serde) + [serde_json](https://crates.io/crates/serde_json) | Serialisation |
 | [rfd](https://crates.io/crates/rfd) | Native file dialogs (a built-in chooser takes over when they can't open, e.g. Linux without xdg-desktop-portal) |
-| [image](https://crates.io/crates/image) | PNG / GIF encoding, picture import |
+| [image](https://crates.io/crates/image) | PNG encoding, picture import |
+| [gif](https://crates.io/crates/gif) | Animated GIF export, frames compressed in parallel |
 | [rhai](https://crates.io/crates/rhai) | Embedded scripting language |
 | [ab_glyph](https://crates.io/crates/ab_glyph) | Font rasterisation for PNG export |
 | [crc32fast](https://crates.io/crates/crc32fast) | Checksums of `.vc` files |

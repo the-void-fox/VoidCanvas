@@ -112,8 +112,6 @@ impl AsciiArtEditor {
     }
 
     pub(super) fn finish_file_action(&mut self, action: FileAction, mut path: PathBuf, ctx: &egui::Context) {
-        // Exports read the cells: 3D layers catch up first.
-        self.finish_3d_now();
         if let Some(dir) = path.parent() {
             self.last_dir = Some(dir.to_path_buf());
         }
@@ -123,6 +121,14 @@ impl AsciiArtEditor {
                 path.set_extension(ext);
             }
         }
+        // Images take a while: they are written in the background.
+        match action {
+            FileAction::ExportPng { transparent } => return self.start_image_export(false, transparent, path),
+            FileAction::ExportGif => return self.start_image_export(true, false, path),
+            _ => {}
+        }
+        // Text exports read the cells: 3D layers catch up first.
+        self.finish_3d_now();
         let text_export = |app: &Self| match action {
             FileAction::ExportText => Some(("Text", export::to_text(&app.doc, export::whole(&app.doc)))),
             FileAction::ExportAnsi => Some(("ANSI", export::to_ansi(&app.doc, export::whole(&app.doc)))),
@@ -149,19 +155,7 @@ impl AsciiArtEditor {
                     self.perform(then, ctx);
                 }
             }
-            FileAction::ExportPng { transparent } => {
-                let result = export::render_png(&self.doc, transparent)
-                    .and_then(|img| img.save(&path).map_err(|e| e.to_string()));
-                match result {
-                    Ok(()) => self.show_status(format!("Exported PNG: {}", path.display())),
-                    Err(e) => self.show_status(format!("PNG export failed: {e}")),
-                }
-            }
             FileAction::LoadModel => self.load_model(&path),
-            FileAction::ExportGif => match export::write_gif(&self.doc, &path) {
-                Ok(()) => self.show_status(format!("Exported GIF: {}", path.display())),
-                Err(e) => self.show_status(format!("GIF export failed: {e}")),
-            },
             _ => {}
         }
     }

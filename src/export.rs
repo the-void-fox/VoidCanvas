@@ -1,5 +1,11 @@
 //! Rendering the document into image files.
 
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::Receiver;
+
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use image::{Rgba, RgbaImage};
 
@@ -24,19 +30,89 @@ pub fn render_png(doc: &Document, transparent: bool) -> Result<RgbaImage, String
     render_frame(doc, doc.frame, transparent)
 }
 
-/// An animated GIF of every frame, looping forever.
-pub fn write_gif(doc: &Document, path: &std::path::Path) -> Result<(), String> {
-    use image::codecs::gif::{GifEncoder, Repeat};
-    use image::{Delay, Frame};
+/// Colour quantisation effort for GIF frames: 1 is slowest and best, 30 fastest.
+const GIF_SPEED: i32 = 10;
+
+/// An animated GIF of every frame, looping forever. Frames are rendered and compressed on
+/// every core; `written` hears how many are in the file so far and answers whether to go on.
+/// A GIF left unfinished (stopped, or failed) is removed.
+pub fn write_gif(doc: &Document, path: &Path, mut written: impl FnMut(usize) -> bool) -> Result<(), String> {
     let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
-    let mut encoder = GifEncoder::new_with_speed(std::io::BufWriter::new(file), 10);
-    encoder.set_repeat(Repeat::Infinite).map_err(|e| e.to_string())?;
-    for (frame, &ms) in doc.durations.iter().enumerate() {
-        let image = render_frame(doc, frame, false)?;
-        let delay = Delay::from_numer_denom_ms(ms, 1);
-        encoder.encode_frame(Frame::from_parts(image, 0, 0, delay)).map_err(|e| e.to_string())?;
+    let result = encode_gif(doc, std::io::BufWriter::new(file), &mut written);
+    if result.is_err() {
+        let _ = std::fs::remove_file(path);
     }
-    Ok(())
+    result
+}
+
+fn encode_gif(doc: &Document, out: impl Write, written: &mut dyn FnMut(usize) -> bool) -> Result<(), String> {
+    let count = doc.frame_count();
+    let (next, stop) = (AtomicUsize::new(0), AtomicBool::new(false));
+    let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).min(count);
+    std::thread::scope(|scope| {
+        let (send, frames) = std::sync::mpsc::channel();
+        for _ in 0..workers {
+            let (send, next, stop) = (send.clone(), &next, &stop);
+            scope.spawn(move || {
+                loop {
+                    let frame = next.fetch_add(1, Ordering::Relaxed);
+                    if frame >= count || stop.load(Ordering::Relaxed) || send.send((frame, gif_frame(doc, frame))).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(send);
+
+        let result = write_in_order(&frames, count, out, written);
+        // The workers stop after the frame in hand.
+        stop.store(true, Ordering::Relaxed);
+        result
+    })
+}
+
+/// A frame number and the frame, ready for the file.
+type EncodedFrame = (usize, Result<gif::Frame<'static>, String>);
+
+/// Frames finish in any order and go into the file in theirs.
+fn write_in_order(frames: &Receiver<EncodedFrame>, count: usize, out: impl Write, written: &mut dyn FnMut(usize) -> bool) -> Result<(), String> {
+    let (mut out, mut encoder) = (Some(out), None);
+    let mut early = BTreeMap::new();
+    let mut done = 0;
+    for (frame, encoded) in frames {
+        early.insert(frame, encoded?);
+        while let Some(frame) = early.remove(&done) {
+            let encoder = match &mut encoder {
+                Some(encoder) => encoder,
+                None => {
+                    let mut first = gif::Encoder::new(out.take().unwrap(), frame.width, frame.height, &[]).map_err(|e| e.to_string())?;
+                    first.set_repeat(gif::Repeat::Infinite).map_err(|e| e.to_string())?;
+                    encoder.insert(first)
+                }
+            };
+            encoder.write_lzw_pre_encoded_frame(&frame).map_err(|e| e.to_string())?;
+            done += 1;
+            if !written(done) {
+                return Err("stopped".into());
+            }
+        }
+    }
+    let Some(encoder) = encoder.filter(|_| done == count) else { return Err("a frame went missing".into()) };
+    encoder.into_inner().map_err(|e| e.to_string())?.flush().map_err(|e| e.to_string())
+}
+
+/// One frame for a GIF, its colours reduced to a palette and compressed.
+fn gif_frame(doc: &Document, frame: usize) -> Result<gif::Frame<'static>, String> {
+    let image = render_frame(doc, frame, false)?;
+    let too_large = |_| format!("{}×{} pixels is too large for a GIF", image.width(), image.height());
+    let (width, height) = (u16::try_from(image.width()).map_err(too_large)?, u16::try_from(image.height()).map_err(too_large)?);
+    let mut pixels = image.into_raw();
+    let mut frame_out = gif::Frame::from_rgba_speed(width, height, &mut pixels, GIF_SPEED);
+    // GIF counts in hundredths of a second.
+    frame_out.delay = u16::try_from(doc.durations[frame] / 10).unwrap_or(u16::MAX);
+    frame_out.dispose = gif::DisposalMethod::Background;
+    frame_out.make_lzw_pre_encoded();
+    Ok(frame_out)
 }
 
 /// One animation frame as an image.

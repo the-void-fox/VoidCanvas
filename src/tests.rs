@@ -893,6 +893,49 @@ mod ui {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// A GIF is written on its own thread while the window keeps drawing; 3D frames it had to
+    /// render on the way stay in the editor.
+    #[test]
+    fn gif_export_runs_in_the_background() {
+        use crate::app::{commands::Action, file_dialog::FileAction};
+        use crate::document::scene::{Object3D, Scene3D};
+        use image::AnimationDecoder;
+        let dir = temp_folder("gif");
+        let mut harness = harness();
+        let ctx = harness.ctx.clone();
+        // Small, so the test stays quick in a debug build.
+        harness.state_mut().doc = crate::document::Document::new(16, 8);
+        for _ in 0..2 {
+            harness.state_mut().run(Action::NewFrame, &ctx);
+            harness.step();
+        }
+        harness.state_mut().last_dir = Some(dir.clone());
+        harness.state_mut().run(Action::ChooseFile(FileAction::ExportGif), &ctx);
+        harness.step();
+        harness.step();
+        harness.state_mut().file_browser.as_mut().expect("the chooser is open").name = "anim".into();
+        // A spinning cube, not rendered yet.
+        let doc = &mut harness.state_mut().doc;
+        let mut layer = crate::document::Layer::new(doc.width, doc.height, "3D");
+        layer.scene = Some(Box::new(Scene3D { object: Object3D::Cube, spin: [0.0, 30.0, 0.0], ..Scene3D::default() }));
+        doc.insert_layer(1, layer);
+        harness.get_by_label("Save").click();
+        harness.step();
+
+        let mut steps = 0;
+        while !harness.state().status_msg.starts_with("Exported GIF") {
+            assert!(steps < 1000, "the export didn't finish: {}", harness.state().status_msg);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            harness.step();
+            steps += 1;
+        }
+        assert!(harness.state().doc.stale_3d().is_empty(), "the frames the export rendered are kept");
+        let file = std::io::BufReader::new(std::fs::File::open(dir.join("anim.gif")).unwrap());
+        let frames = image::codecs::gif::GifDecoder::new(file).unwrap().into_frames().collect_frames().unwrap();
+        assert_eq!(frames.len(), 3);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// Collects `log` warnings from now on (one logger for the whole test run).
     fn capture_warnings() -> &'static std::sync::Mutex<Vec<String>> {
         struct Capture;
@@ -1618,12 +1661,27 @@ mod animation {
         let mut doc = three_frames(&mut history);
         doc.durations = vec![100, 200, 300];
         let path = std::env::temp_dir().join(format!("void-canvas-test-{}.gif", std::process::id()));
-        crate::export::write_gif(&doc, &path).unwrap();
+        crate::export::write_gif(&doc, &path, |_| true).unwrap();
         let file = std::io::BufReader::new(std::fs::File::open(&path).unwrap());
         let frames = image::codecs::gif::GifDecoder::new(file).unwrap().into_frames().collect_frames().unwrap();
         std::fs::remove_file(&path).unwrap();
         let delays: Vec<u32> = frames.iter().map(|f| f.delay().numer_denom_ms().0 / f.delay().numer_denom_ms().1.max(1)).collect();
         assert_eq!(delays, vec![100, 200, 300]);
+    }
+
+    #[test]
+    fn a_stopped_gif_export_leaves_no_file() {
+        let mut history = History::new(50);
+        let doc = three_frames(&mut history);
+        let path = std::env::temp_dir().join(format!("void-canvas-stop-{}.gif", std::process::id()));
+        let mut heard = Vec::new();
+        let result = crate::export::write_gif(&doc, &path, |written| {
+            heard.push(written);
+            written < 2
+        });
+        assert!(result.is_err());
+        assert_eq!(heard, [1, 2], "frames are counted in order, and none after the stop");
+        assert!(!path.exists());
     }
 }
 

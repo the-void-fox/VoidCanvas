@@ -1,7 +1,9 @@
 //! Work done off the UI thread, so the window keeps answering: rendering 3D layers, the system
-//! file dialog, and reading pictures. A small window shows what is going on meanwhile.
+//! file dialog, reading pictures and exporting images. A small window shows what is going on meanwhile.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
@@ -11,7 +13,7 @@ use image::RgbaImage;
 use super::AsciiArtEditor;
 use super::file_dialog::FileAction;
 use crate::document::Cell;
-use crate::theme;
+use crate::{export, theme};
 
 /// 3D frames being rendered in the background.
 pub struct RenderJob {
@@ -34,6 +36,29 @@ pub struct PendingDialog {
 pub struct LoadingPicture {
     name: String,
     image: Receiver<Result<RgbaImage, String>>,
+}
+
+/// A PNG or GIF being written from a copy of the document.
+pub struct ExportJob {
+    kind: &'static str,
+    path: PathBuf,
+    /// The document's render generation it started from: 3D frames it renders are kept if it still matches.
+    generation: u64,
+    progress: Receiver<ExportProgress>,
+    /// Set by Cancel; the export stops after the frame in hand.
+    stop: Arc<AtomicBool>,
+    /// 3D frames to render first, and how many are done.
+    renders: (usize, usize),
+    /// Frames to write, and how many are in the file.
+    frames: (usize, usize),
+}
+
+enum ExportProgress {
+    /// A 3D frame that was out of date (the editor takes it too).
+    Rendered(usize, usize, Vec<Cell>),
+    /// Frames in the file so far.
+    Written(usize),
+    Finished(Result<(), String>),
 }
 
 /// A system dialog that returns faster than this was never shown (nobody cancels that quickly).
@@ -66,7 +91,8 @@ impl AsciiArtEditor {
                 self.render_job = None;
             }
         }
-        if self.render_job.is_none() {
+        // An export renders the 3D frames it needs itself.
+        if self.render_job.is_none() && self.export_job.is_none() {
             let work = self.doc.stale_3d();
             if !work.is_empty() {
                 let (w, h) = (self.doc.width, self.doc.height);
@@ -86,6 +112,76 @@ impl AsciiArtEditor {
         }
         if self.render_job.is_some() {
             ctx.request_repaint_after(Duration::from_millis(30));
+        }
+    }
+
+    /// Writes a PNG or GIF on another thread, from a copy of the document; 3D frames still out of
+    /// date are rendered there first. The waiting window shows how far it is.
+    pub(super) fn start_image_export(&mut self, gif: bool, transparent: bool, path: PathBuf) {
+        // The export renders what it needs; the editor's own 3D work waits until it is done.
+        self.render_job = None;
+        let mut doc = self.doc.clone();
+        let frames: Vec<usize> = if gif { (0..doc.frame_count()).collect() } else { vec![doc.frame] };
+        let stale: Vec<(usize, usize)> = doc.stale_3d().into_iter().filter(|(_, frame)| frames.contains(frame)).collect();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (send, progress) = channel();
+        self.export_job = Some(ExportJob {
+            kind: if gif { "GIF" } else { "PNG" },
+            path: path.clone(),
+            generation: doc.render_gen,
+            progress,
+            stop: stop.clone(),
+            renders: (stale.len(), 0),
+            frames: (frames.len(), 0),
+        });
+        std::thread::spawn(move || {
+            let (w, h) = (doc.width, doc.height);
+            for (layer, frame) in stale {
+                if stop.load(Ordering::Relaxed) { break; }
+                let Some(scene) = doc.layers[layer].scene.clone() else { continue };
+                let cells = scene.render(w, h, frame);
+                doc.finish_3d(layer, frame, cells.clone());
+                if send.send(ExportProgress::Rendered(layer, frame, cells)).is_err() { return; }
+            }
+            let result = if stop.load(Ordering::Relaxed) {
+                Err("stopped".into())
+            } else if gif {
+                export::write_gif(&doc, &path, |written| !stop.load(Ordering::Relaxed) && send.send(ExportProgress::Written(written)).is_ok())
+            } else {
+                export::render_png(&doc, transparent).and_then(|image| {
+                    if stop.load(Ordering::Relaxed) { return Err("stopped".into()); }
+                    image.save(&path).map_err(|e| e.to_string())
+                })
+            };
+            let _ = send.send(ExportProgress::Finished(result));
+        });
+    }
+
+    pub(super) fn poll_export(&mut self, ctx: &egui::Context) {
+        let Some(job) = &mut self.export_job else { return };
+        let finished = loop {
+            match job.progress.try_recv() {
+                Ok(ExportProgress::Rendered(layer, frame, cells)) => {
+                    job.renders.1 += 1;
+                    if job.generation == self.doc.render_gen {
+                        self.doc.finish_3d(layer, frame, cells);
+                    }
+                }
+                Ok(ExportProgress::Written(written)) => job.frames.1 = written,
+                Ok(ExportProgress::Finished(result)) => break Some(result),
+                Err(TryRecvError::Empty) => break None,
+                Err(TryRecvError::Disconnected) => break Some(Err("the export stopped unexpectedly".into())),
+            }
+        };
+        let Some(result) = finished else {
+            ctx.request_repaint_after(Duration::from_millis(50));
+            return;
+        };
+        let job = self.export_job.take().unwrap();
+        match result {
+            Ok(()) => self.show_status(format!("Exported {}: {}", job.kind, job.path.display())),
+            Err(_) if job.stop.load(Ordering::Relaxed) => self.show_status(format!("{} export cancelled", job.kind)),
+            Err(e) => self.show_status(format!("{} export failed: {e}", job.kind)),
         }
     }
 
@@ -171,6 +267,35 @@ impl AsciiArtEditor {
 
     /// Something the user waits for: a small window in front, so nothing else starts meanwhile.
     pub(super) fn waiting_window(&mut self, ctx: &egui::Context) {
+        if let Some(job) = &self.export_job {
+            let stopping = job.stop.load(Ordering::Relaxed);
+            let ((renders, rendered), (frames, written)) = (job.renders, job.frames);
+            let (text, done, total) = if stopping {
+                ("Stopping…".to_owned(), rendered + written, renders + frames)
+            } else if rendered < renders {
+                (format!("Rendering 3D frames  {rendered} / {renders}"), rendered, renders + frames)
+            } else if frames > 1 {
+                (format!("Writing {}  frame {} / {frames}", job.kind, (written + 1).min(frames)), renders + written, renders + frames)
+            } else {
+                (format!("Writing {}…", job.kind), renders, renders + frames)
+            };
+            let mut cancel = false;
+            Modal::new(Id::new("waiting")).show(ctx, |ui| {
+                ui.set_width(320.0);
+                ui.horizontal(|ui| {
+                    ui.add(Spinner::new().size(18.0).color(theme::ACCENT));
+                    ui.label(text);
+                });
+                ui.add_space(6.0);
+                ui.add(ProgressBar::new(done as f32 / total.max(1) as f32).desired_height(10.0).fill(theme::ACCENT_STRONG));
+                ui.add_space(6.0);
+                cancel = ui.add_enabled(!stopping, Button::new("Cancel")).clicked();
+            });
+            if cancel {
+                job.stop.store(true, Ordering::Relaxed);
+            }
+            return;
+        }
         let (text, can_skip) = if let Some(loading) = &self.loading_picture {
             (format!("Reading {}…", loading.name), false)
         } else if self.pending_dialog.is_some() {
@@ -199,6 +324,6 @@ impl AsciiArtEditor {
 
     /// Is something running that the user waits for (the waiting window is up)?
     pub(super) fn waiting(&self) -> bool {
-        self.loading_picture.is_some() || self.pending_dialog.is_some()
+        self.loading_picture.is_some() || self.pending_dialog.is_some() || self.export_job.is_some()
     }
 }

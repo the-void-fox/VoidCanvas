@@ -4199,6 +4199,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_kittest",
+ "gif",
  "image",
  "log",
  "rfd",

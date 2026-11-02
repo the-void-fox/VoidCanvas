@@ -147,6 +147,8 @@ pub struct AsciiArtEditor {
     pending_dialog: Option<background::PendingDialog>,
     /// A picture being read for Import Image.
     loading_picture: Option<background::LoadingPicture>,
+    /// A PNG or GIF being written.
+    export_job: Option<background::ExportJob>,
     /// The Library window, while open.
     pub(crate) library: Option<library::LibraryWindow>,
     /// The 3D window, while open.
@@ -212,6 +214,7 @@ impl Default for AsciiArtEditor {
             render_job:     None,
             pending_dialog: None,
             loading_picture: None,
+            export_job: None,
             style_before:   None,
             brush_save_name: String::new(),
             active_tab:     0,
@@ -1124,6 +1127,7 @@ impl eframe::App for AsciiArtEditor {
         self.autosave(&ctx);
         self.poll_file_dialog(&ctx);
         self.poll_loading_picture(&ctx);
+        self.poll_export(&ctx);
         self.run_render_job(&ctx);
         self.handle_keyboard(&ctx);
         self.advance_playback(&ctx);
